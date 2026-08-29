@@ -11,6 +11,7 @@ fact reconstructs exactly what the engine did and why.
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -22,6 +23,8 @@ from core.compliance import ComplianceChecker, ComplianceResult
 from core.policy import DeterministicPolicy, ThompsonSamplingBandit, BANDIT_ARMS
 from core.outcome_simulator import simulate_outcome, OutcomeResult
 from core.audit import AuditLog
+from core.circuit_breaker import CircuitBreaker
+from core.logging_config import get_logger
 
 
 @dataclass
@@ -32,6 +35,7 @@ class DecisionRecord:
     chosen_action: Action
     compliance: ComplianceResult
     outcome: Optional[OutcomeResult]
+    latencies_ms: dict = field(default_factory=dict)
 
     @property
     def recovered_amount(self) -> float:
@@ -89,9 +93,12 @@ class RecoveryEngine:
         bandit: Optional[ThompsonSamplingBandit] = None,
         rng: Optional[random.Random] = None,
         seed: Optional[int] = None,
+        breaker: Optional[CircuitBreaker] = None,
+        log_path: Optional[str] = "results/agent.jsonl",
     ):
         assert policy_mode in ("deterministic", "bandit")
-        self.classifier = Classifier(use_llm=use_llm)
+        self.breaker = breaker if breaker is not None else CircuitBreaker(failure_threshold=3, cooldown_seconds=60.0)
+        self.classifier = Classifier(use_llm=use_llm, breaker=self.breaker)
         self.compliance = ComplianceChecker()
         self.det_policy = DeterministicPolicy()
         self.bandit = bandit if bandit is not None else ThompsonSamplingBandit(
@@ -100,6 +107,7 @@ class RecoveryEngine:
         self.policy_mode = policy_mode
         self.audit = AuditLog(audit_path) if audit_path else None
         self.rng = rng if rng is not None else (random.Random(seed) if seed is not None else random.Random())
+        self.logger = get_logger(log_path=log_path) if log_path else None
 
     def _select_action(self, event: RevenueEvent, diagnosis: Diagnosis, now: datetime):
         """Returns (chosen_action, compliance_result)."""
@@ -122,12 +130,26 @@ class RecoveryEngine:
             cr = self.compliance.check(event, chosen, now)
             return chosen, cr
 
+    def _log(self, trace_id: str, layer: str, message: str) -> None:
+        if self.logger is not None:
+            self.logger.info(message, extra={"trace_id": trace_id, "layer": layer})
+
     def process_event(self, event: RevenueEvent, now: Optional[datetime] = None) -> DecisionRecord:
         now = now or datetime.now(timezone.utc)
+        trace_id = event.trace_id
+        latencies: dict[str, float] = {}
 
+        t0 = time.perf_counter()
         diagnosis = self.classifier.diagnose(event)
-        priority = prioritize(event, diagnosis)
+        latencies["diagnose"] = (time.perf_counter() - t0) * 1000
+        self._log(trace_id, "diagnose", f"category={diagnosis.category.value} confidence={diagnosis.confidence:.2f} llm_used={diagnosis.llm_used}")
 
+        t0 = time.perf_counter()
+        priority = prioritize(event, diagnosis)
+        latencies["prioritize"] = (time.perf_counter() - t0) * 1000
+        self._log(trace_id, "prioritize", f"ev={priority.ev:.2f} pursue={priority.pursue}")
+
+        t0 = time.perf_counter()
         if not priority.pursue:
             chosen_action = Action.NO_ACTION_DO_NOT_PURSUE
             compliance_result = ComplianceResult(True, "Not pursued (negative EV) -- compliance N/A.", self.compliance.version)
@@ -140,6 +162,12 @@ class RecoveryEngine:
                 outcome = simulate_outcome(event.decline_reason, chosen_action, event.amount, rng=self.rng)
                 if self.policy_mode == "bandit":
                     self.bandit.update(event.decline_reason.value, chosen_action, int(outcome.recovered))
+        latencies["policy_and_compliance"] = (time.perf_counter() - t0) * 1000
+        self._log(
+            trace_id, "policy",
+            f"action={chosen_action.value} compliance_allowed={compliance_result.allowed} "
+            f"outcome_recovered={outcome.recovered if outcome else None}",
+        )
 
         record = DecisionRecord(
             event=event,
@@ -148,10 +176,14 @@ class RecoveryEngine:
             chosen_action=chosen_action,
             compliance=compliance_result,
             outcome=outcome,
+            latencies_ms=latencies,
         )
 
+        t0 = time.perf_counter()
         if self.audit is not None:
             self.audit.append(record.to_audit_payload())
+        latencies["audit"] = (time.perf_counter() - t0) * 1000
+        self._log(trace_id, "audit", "decision appended to hash-chained audit log")
 
         return record
 

@@ -51,6 +51,7 @@ class Diagnosis:
     rationale: str
     llm_used: bool
     llm_error: Optional[str] = None
+    llm_attempted: bool = False  # True only if an actual API call was made (use_llm=True and breaker allowed it)
 
 
 def _rule_based_diagnosis(event: RevenueEvent) -> Diagnosis:
@@ -143,12 +144,17 @@ class Classifier:
             base.rationale += " [LLM skipped: circuit breaker open, rule-based-only mode]"
             return base
 
+        import os as _os
+        if not _os.environ.get("GROQ_API_KEY"):
+            # no API key configured -- never even attempted, not a "fallback"
+            return base
+
+        base.llm_attempted = True
         t0 = time.time()
         refinement = _call_groq_for_refinement(event, base)
         latency = time.time() - t0
 
         if refinement is None:
-            # no API key configured -- silent, expected fallback
             return base
 
         if "_error" in refinement:
