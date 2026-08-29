@@ -23,7 +23,10 @@ import urllib.error
 from core.schema import RevenueEvent, EventSource, DeclineReason, DiagnosisCategory
 
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
+# llama-3.1-8b-instant was retired from Groq's lineup; openai/gpt-oss-20b is
+# a current, fast, free-tier-available model. Override via GROQ_MODEL if
+# your account's available models (GET /openai/v1/models) differ.
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
 
 # --- deterministic rule table: decline_reason -> (diagnosis, base_confidence, is_retriable) ---
 _RULES = {
@@ -89,14 +92,24 @@ def _call_groq_for_refinement(event: RevenueEvent, base: Diagnosis) -> Optional[
         "Do not change the category, only refine confidence and add a short human-readable rationale."
     )
 
-    body = json.dumps(
-        {
-            "model": GROQ_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2,
-            "max_tokens": 150,
-        }
-    ).encode("utf-8")
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "max_tokens": 400,
+    }
+    if "gpt-oss" in GROQ_MODEL or "qwen" in GROQ_MODEL:
+        # Reasoning models spend tokens on hidden reasoning before the
+        # visible answer -- at default effort this task alone burned
+        # 298/300 tokens on reasoning and got cut off with EMPTY content
+        # (finish_reason="length") before ever writing the JSON. "low"
+        # effort reliably leaves room for the actual answer on a task this
+        # small. IMPORTANT: this field is NOT universal -- Groq returns a
+        # 400 ("reasoning_effort is not supported with this model") for
+        # non-reasoning models, so it's only sent for models known to
+        # support it rather than always-on.
+        payload["reasoning_effort"] = "low"
+    body = json.dumps(payload).encode("utf-8")
 
     req = urllib.request.Request(
         GROQ_API_URL,
@@ -104,11 +117,16 @@ def _call_groq_for_refinement(event: RevenueEvent, base: Diagnosis) -> Optional[
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            # Without a browser-like User-Agent, Groq's Cloudflare front-end
+            # blocks the request outright (HTTP 403, Cloudflare error 1010)
+            # before it ever reaches Groq's API -- this bit a real API key
+            # during testing, not just missing/invalid ones.
+            "User-Agent": "Mozilla/5.0 (compatible; revenue-recovery-agent/1.0)",
         },
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=6) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
         content = payload["choices"][0]["message"]["content"]
         # tolerate the model wrapping JSON in prose / code fences
