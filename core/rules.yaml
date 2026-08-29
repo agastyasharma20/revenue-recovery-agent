@@ -1,0 +1,27 @@
+# Compliance / stopping-rule thresholds for the Revenue Recovery Agent.
+#
+# These are grounded in NPCI e-mandate retry conventions for recurring
+# payments in India: gateways commonly cap auto-debit retry attempts at 3,
+# require a cooling-off gap between attempts, and disallow contacting the
+# mandate/authorization within a short window of its creation. Kept in YAML
+# (not hardcoded in Python) so compliance/audit can review and version
+# thresholds without a code deploy.
+#
+# version: bump this whenever a threshold changes; the audit log records
+# which rules_version was active for every decision.
+version: 1
+
+npci_mandate_retry:
+  # Hard cap on automated retry attempts per event (NPCI e-mandate convention).
+  max_retries: 3
+
+  # Minimum gap required between two retry attempts on the same event.
+  min_hours_between_retries: 24
+
+  # After this many days from event creation, stop pursuing recovery
+  # entirely (regulatory + cost-of-pursuit cutoff).
+  pursuit_window_days: 7
+
+  # Never retry within this many hours of the mandate's creation --
+  # newly-created mandates need time to settle with the issuing bank.
+  no_retry_within_hours_of_mandate_creation: 24
