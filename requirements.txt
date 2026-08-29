@@ -6,3 +6,4 @@ matplotlib>=3.7
 streamlit>=1.30
 razorpay>=1.4
 python-dotenv>=1.0
+Flask>=3.0
