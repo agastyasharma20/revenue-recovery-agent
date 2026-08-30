@@ -11,22 +11,13 @@ must never depend on the LLM to function.
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from dataclasses import dataclass
 from typing import Optional
 
-import urllib.request
-import urllib.error
-
 from core.schema import RevenueEvent, EventSource, DeclineReason, DiagnosisCategory
-
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-# llama-3.1-8b-instant was retired from Groq's lineup; openai/gpt-oss-20b is
-# a current, fast, free-tier-available model. Override via GROQ_MODEL if
-# your account's available models (GET /openai/v1/models) differ.
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
+from core.llm_client import call_groq, extract_json_object
 
 # --- deterministic rule table: decline_reason -> (diagnosis, base_confidence, is_retriable) ---
 _RULES = {
@@ -74,13 +65,9 @@ def _rule_based_diagnosis(event: RevenueEvent) -> Diagnosis:
     )
 
 
-def _call_groq_for_refinement(event: RevenueEvent, base: Diagnosis) -> Optional[dict]:
-    """Best-effort call to Groq's OpenAI-compatible endpoint. Returns None on
-    any failure -- caller falls back to the rule-based result."""
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        return None
-
+def _refine_via_llm(event: RevenueEvent, base: Diagnosis) -> Optional[dict]:
+    """Returns {"confidence":..., "rationale":...} on success, or
+    {"_error": "..."} on any failure -- caller falls back to rule-based."""
     prompt = (
         "You are refining a rule-based payment-failure diagnosis. "
         f"Event: source={event.source.value}, decline_reason={event.decline_reason.value}, "
@@ -92,52 +79,17 @@ def _call_groq_for_refinement(event: RevenueEvent, base: Diagnosis) -> Optional[
         "Do not change the category, only refine confidence and add a short human-readable rationale."
     )
 
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,
-        "max_tokens": 400,
-    }
-    if "gpt-oss" in GROQ_MODEL or "qwen" in GROQ_MODEL:
-        # Reasoning models spend tokens on hidden reasoning before the
-        # visible answer -- at default effort this task alone burned
-        # 298/300 tokens on reasoning and got cut off with EMPTY content
-        # (finish_reason="length") before ever writing the JSON. "low"
-        # effort reliably leaves room for the actual answer on a task this
-        # small. IMPORTANT: this field is NOT universal -- Groq returns a
-        # 400 ("reasoning_effort is not supported with this model") for
-        # non-reasoning models, so it's only sent for models known to
-        # support it rather than always-on.
-        payload["reasoning_effort"] = "low"
-    body = json.dumps(payload).encode("utf-8")
+    result = call_groq(prompt, max_tokens=400, temperature=0.2)
+    if not result.ok:
+        return {"_error": result.error}
 
-    req = urllib.request.Request(
-        GROQ_API_URL,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            # Without a browser-like User-Agent, Groq's Cloudflare front-end
-            # blocks the request outright (HTTP 403, Cloudflare error 1010)
-            # before it ever reaches Groq's API -- this bit a real API key
-            # during testing, not just missing/invalid ones.
-            "User-Agent": "Mozilla/5.0 (compatible; revenue-recovery-agent/1.0)",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-        content = payload["choices"][0]["message"]["content"]
-        # tolerate the model wrapping JSON in prose / code fences
-        start, end = content.find("{"), content.rfind("}")
-        parsed = json.loads(content[start : end + 1])
-        conf = float(parsed.get("confidence", base.confidence))
-        conf = max(0.0, min(1.0, conf))
-        rationale = str(parsed.get("rationale", "")).strip() or base.rationale
-        return {"confidence": conf, "rationale": rationale}
-    except Exception as exc:  # noqa: BLE001 -- deliberately broad, this must never crash the pipeline
-        return {"_error": f"{type(exc).__name__}: {exc}"}
+    parsed = extract_json_object(result.content)
+    if parsed is None:
+        return {"_error": f"could_not_parse_json: {result.content[:200]!r}"}
+
+    conf = max(0.0, min(1.0, float(parsed.get("confidence", base.confidence))))
+    rationale = str(parsed.get("rationale", "")).strip() or base.rationale
+    return {"confidence": conf, "rationale": rationale}
 
 
 class Classifier:
@@ -162,18 +114,14 @@ class Classifier:
             base.rationale += " [LLM skipped: circuit breaker open, rule-based-only mode]"
             return base
 
-        import os as _os
-        if not _os.environ.get("GROQ_API_KEY"):
+        if not os.environ.get("GROQ_API_KEY"):
             # no API key configured -- never even attempted, not a "fallback"
             return base
 
         base.llm_attempted = True
         t0 = time.time()
-        refinement = _call_groq_for_refinement(event, base)
+        refinement = _refine_via_llm(event, base)
         latency = time.time() - t0
-
-        if refinement is None:
-            return base
 
         if "_error" in refinement:
             if self.breaker is not None:
