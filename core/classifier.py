@@ -45,6 +45,9 @@ class Diagnosis:
     llm_used: bool
     llm_error: Optional[str] = None
     llm_attempted: bool = False  # True only if an actual API call was made (use_llm=True and breaker allowed it)
+    llm_provider: Optional[str] = None  # "groq" | "gemini" | None -- whichever actually served the call
+    llm_prompt_tokens: int = 0
+    llm_completion_tokens: int = 0
 
 
 def _rule_based_diagnosis(event: RevenueEvent) -> Diagnosis:
@@ -79,16 +82,17 @@ def _refine_via_llm(event: RevenueEvent, base: Diagnosis) -> Optional[dict]:
     )
 
     result = call_llm(prompt, max_tokens=400, temperature=0.2)
+    usage = {"provider": result.provider, "prompt_tokens": result.prompt_tokens, "completion_tokens": result.completion_tokens}
     if not result.ok:
-        return {"_error": result.error}
+        return {"_error": result.error, **usage}
 
     parsed = extract_json_object(result.content)
     if parsed is None:
-        return {"_error": f"could_not_parse_json: {result.content[:200]!r}"}
+        return {"_error": f"could_not_parse_json: {result.content[:200]!r}", **usage}
 
     conf = max(0.0, min(1.0, float(parsed.get("confidence", base.confidence))))
     rationale = str(parsed.get("rationale", "")).strip() or base.rationale
-    return {"confidence": conf, "rationale": rationale}
+    return {"confidence": conf, "rationale": rationale, **usage}
 
 
 class Classifier:
@@ -121,6 +125,9 @@ class Classifier:
         t0 = time.time()
         refinement = _refine_via_llm(event, base)
         latency = time.time() - t0
+        base.llm_provider = refinement.get("provider")
+        base.llm_prompt_tokens = refinement.get("prompt_tokens", 0)
+        base.llm_completion_tokens = refinement.get("completion_tokens", 0)
 
         if "_error" in refinement:
             if self.breaker is not None:
@@ -133,6 +140,6 @@ class Classifier:
             self.breaker.record_success()
 
         base.confidence = refinement["confidence"]
-        base.rationale = refinement["rationale"] + f" (LLM-refined, {latency*1000:.0f}ms)"
+        base.rationale = refinement["rationale"] + f" (LLM-refined via {base.llm_provider}, {latency*1000:.0f}ms)"
         base.llm_used = True
         return base

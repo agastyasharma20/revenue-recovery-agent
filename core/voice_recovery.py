@@ -42,6 +42,9 @@ class VoiceScript:
     closing_line: str
     generated_by: str  # "llm" | "template_fallback"
     llm_error: Optional[str] = None
+    llm_provider: Optional[str] = None
+    llm_prompt_tokens: int = 0
+    llm_completion_tokens: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -53,6 +56,9 @@ class VoiceScript:
             "closing_line": self.closing_line,
             "generated_by": self.generated_by,
             "llm_error": self.llm_error,
+            "llm_provider": self.llm_provider,
+            "llm_prompt_tokens": self.llm_prompt_tokens,
+            "llm_completion_tokens": self.llm_completion_tokens,
         }
 
     def render(self) -> str:
@@ -124,7 +130,7 @@ def _template_script(event: RevenueEvent, diagnosis: Diagnosis) -> VoiceScript:
     )
 
 
-def _llm_script(event: RevenueEvent, diagnosis: Diagnosis) -> tuple[Optional[VoiceScript], Optional[str]]:
+def _llm_script(event: RevenueEvent, diagnosis: Diagnosis) -> tuple[Optional[VoiceScript], Optional[str], dict]:
     context = "a B2B overdue invoice" if event.source == EventSource.B2B_RECEIVABLE_OVERDUE else (
         "an abandoned checkout" if event.source == EventSource.CHECKOUT_ABANDONED else "a failed subscription payment"
     )
@@ -151,13 +157,14 @@ def _llm_script(event: RevenueEvent, diagnosis: Diagnosis) -> tuple[Optional[Voi
     # to matter (reasoning_effort="low" reduces but doesn't eliminate
     # reasoning-token overhead). 1000 leaves real headroom.
     result = call_llm(prompt, max_tokens=1000, temperature=0.6)
+    usage = {"llm_provider": result.provider, "llm_prompt_tokens": result.prompt_tokens, "llm_completion_tokens": result.completion_tokens}
     if not result.ok:
-        return None, result.error
+        return None, result.error, usage
 
     parsed = extract_json_object(result.content)
     required_keys = ("opening_line", "main_ask", "objection_handling", "closing_line")
     if parsed is None or not all(k in parsed for k in required_keys):
-        return None, f"could_not_parse_expected_json_shape: {result.content[:200]!r}"
+        return None, f"could_not_parse_expected_json_shape: {result.content[:200]!r}", usage
 
     script = VoiceScript(
         event_id=event.event_id,
@@ -167,18 +174,22 @@ def _llm_script(event: RevenueEvent, diagnosis: Diagnosis) -> tuple[Optional[Voi
         objection_handling={str(k): str(v) for k, v in dict(parsed["objection_handling"]).items()},
         closing_line=str(parsed["closing_line"]),
         generated_by="llm",
+        **usage,
     )
-    return script, None
+    return script, None, usage
 
 
 def generate_voice_script(event: RevenueEvent, diagnosis: Diagnosis) -> VoiceScript:
     """Tries the LLM first (richer, tailored, varies naturally); falls back
     to a tested static template on any failure -- missing key, network
     error, malformed response. Always returns a usable script."""
-    llm_result, error = _llm_script(event, diagnosis)
+    llm_result, error, usage = _llm_script(event, diagnosis)
     if llm_result is not None:
         return llm_result
 
     fallback = _template_script(event, diagnosis)
     fallback.llm_error = error
+    fallback.llm_provider = usage.get("llm_provider")
+    fallback.llm_prompt_tokens = usage.get("llm_prompt_tokens", 0)
+    fallback.llm_completion_tokens = usage.get("llm_completion_tokens", 0)
     return fallback

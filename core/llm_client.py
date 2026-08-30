@@ -54,6 +54,8 @@ class LLMResult:
     content: Optional[str]
     error: Optional[str]
     provider: Optional[str] = None  # which provider actually served this, or attempted last
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
     @property
     def ok(self) -> bool:
@@ -98,9 +100,12 @@ def _call_groq_raw(prompt: str, max_tokens: int, temperature: float, timeout: fl
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         content = data["choices"][0]["message"]["content"]
+        usage = data.get("usage", {})
+        pt, ct = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
         if not content:
-            return LLMResult(content=None, error="empty_content (likely reasoning-token truncation)", provider="groq")
-        return LLMResult(content=content, error=None, provider="groq")
+            return LLMResult(content=None, error="empty_content (likely reasoning-token truncation)",
+                              provider="groq", prompt_tokens=pt, completion_tokens=ct)
+        return LLMResult(content=content, error=None, provider="groq", prompt_tokens=pt, completion_tokens=ct)
     except Exception as exc:  # noqa: BLE001 -- deliberately broad, must never crash the pipeline
         return LLMResult(content=None, error=f"{type(exc).__name__}: {exc}", provider="groq")
 
@@ -134,10 +139,13 @@ def _call_gemini_raw(prompt: str, max_tokens: int, temperature: float, timeout: 
             return LLMResult(content=None, error=f"no_candidates: {reason}", provider="gemini")
         parts = candidates[0].get("content", {}).get("parts", [])
         content = "".join(p.get("text", "") for p in parts)
+        usage = data.get("usageMetadata", {})
+        pt, ct = usage.get("promptTokenCount", 0), usage.get("candidatesTokenCount", 0)
         if not content:
             finish_reason = candidates[0].get("finishReason", "unknown")
-            return LLMResult(content=None, error=f"empty_content (finishReason={finish_reason})", provider="gemini")
-        return LLMResult(content=content, error=None, provider="gemini")
+            return LLMResult(content=None, error=f"empty_content (finishReason={finish_reason})",
+                              provider="gemini", prompt_tokens=pt, completion_tokens=ct)
+        return LLMResult(content=content, error=None, provider="gemini", prompt_tokens=pt, completion_tokens=ct)
     except Exception as exc:  # noqa: BLE001
         return LLMResult(content=None, error=f"{type(exc).__name__}: {exc}", provider="gemini")
 
