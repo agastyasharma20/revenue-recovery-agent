@@ -11,13 +11,12 @@ must never depend on the LLM to function.
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
 from typing import Optional
 
 from core.schema import RevenueEvent, EventSource, DeclineReason, DiagnosisCategory
-from core.llm_client import call_groq, extract_json_object
+from core.llm_client import call_llm, extract_json_object, any_provider_configured
 
 # --- deterministic rule table: decline_reason -> (diagnosis, base_confidence, is_retriable) ---
 _RULES = {
@@ -79,7 +78,7 @@ def _refine_via_llm(event: RevenueEvent, base: Diagnosis) -> Optional[dict]:
         "Do not change the category, only refine confidence and add a short human-readable rationale."
     )
 
-    result = call_groq(prompt, max_tokens=400, temperature=0.2)
+    result = call_llm(prompt, max_tokens=400, temperature=0.2)
     if not result.ok:
         return {"_error": result.error}
 
@@ -114,8 +113,8 @@ class Classifier:
             base.rationale += " [LLM skipped: circuit breaker open, rule-based-only mode]"
             return base
 
-        if not os.environ.get("GROQ_API_KEY"):
-            # no API key configured -- never even attempted, not a "fallback"
+        if not any_provider_configured():
+            # no API key configured for ANY provider -- never even attempted, not a "fallback"
             return base
 
         base.llm_attempted = True

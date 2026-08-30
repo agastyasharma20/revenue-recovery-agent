@@ -29,7 +29,7 @@ from typing import Optional
 
 from core.schema import RevenueEvent, DiagnosisCategory, EventSource
 from core.classifier import Diagnosis
-from core.llm_client import call_groq, extract_json_object
+from core.llm_client import call_llm, extract_json_object
 
 
 @dataclass
@@ -150,7 +150,7 @@ def _llm_script(event: RevenueEvent, diagnosis: Diagnosis) -> tuple[Optional[Voi
     # 600 tokens still got truncated mid-JSON often enough during testing
     # to matter (reasoning_effort="low" reduces but doesn't eliminate
     # reasoning-token overhead). 1000 leaves real headroom.
-    result = call_groq(prompt, max_tokens=1000, temperature=0.6)
+    result = call_llm(prompt, max_tokens=1000, temperature=0.6)
     if not result.ok:
         return None, result.error
 
