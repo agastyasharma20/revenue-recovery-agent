@@ -1,9 +1,8 @@
 <div align="center">
 
-# 💸 AI Revenue Recovery Agent
+![AI Revenue Recovery Agent](docs/screenshots/00-banner.png)
 
 **Detect. Diagnose. Decide. Recover. Prove it.**
-
 Built for the **Razorpay AI Buildathon — Track 03: AI Revenue Recovery**
 
 [![Tests](https://img.shields.io/badge/tests-87%2F87%20passing-brightgreen?style=for-the-badge)](#reproduce-every-number)
@@ -14,8 +13,6 @@ Built for the **Razorpay AI Buildathon — Track 03: AI Revenue Recovery**
 [![Groq](https://img.shields.io/badge/Groq-LLM-F55036?style=for-the-badge)](core/llm_client.py)
 [![Gemini](https://img.shields.io/badge/Gemini-fallback-4285F4?style=for-the-badge&logo=google&logoColor=white)](core/llm_client.py)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow?style=for-the-badge)](LICENSE)
-
-*20+ commits, one per real change. 6 real bugs found and fixed in the open. Every number below is a command, not a claim.*
 
 </div>
 
