@@ -96,6 +96,31 @@ clustering for human-
 receiver for real Razorpay `payment.failed` / `subscription.charged.failed`
 webhooks, signature-verified via Razorpay's own SDK.
 
+Same pipeline, rendered as a flowchart (GitHub renders this natively):
+
+```mermaid
+flowchart TD
+    A["Webhook / synthetic batch"] --> B["RevenueEvent<br/>core/schema.py"]
+    B --> C["Diagnose<br/>core/classifier.py"]
+    C --> D["Prioritize: EV<br/>core/prioritizer.py"]
+    D -->|"EV <= 0"| Z1["Closed: not pursued"]
+    D -->|"EV > 0"| E["Compliance check<br/>core/compliance.py"]
+    E -->|"blocked"| Z2["Closed: no compliant action"]
+    E -->|"allowed"| F["Select action<br/>core/policy.py / contextual_bandit.py"]
+    F --> G{"Needs human approval?<br/>core/approval.py"}
+    G -->|"yes, HITL mode"| H["Pending approval queue"]
+    H -->|"approved"| I["Execute action"]
+    H -->|"rejected"| Z3["Closed: rejected"]
+    G -->|"no / auto-approve"| I
+    I --> J["Outcome simulation<br/>core/outcome_simulator.py"]
+    J --> K["Promise-to-pay tracking<br/>core/promise_tracking.py"]
+    K --> L["Hash-chained audit log<br/>core/audit.py"]
+    J -.optional.-> M["Real Razorpay Payment Link<br/>core/payment_links.py"]
+    J -.optional.-> N["Hinglish voice script<br/>core/voice_recovery.py"]
+    L --> O["FastAPI + WebSocket<br/>backend/main.py"]
+    O --> P["React dashboard<br/>frontend/"]
+```
+
 ---
 
 ## Mapped to Track 03's actual bar
@@ -106,7 +131,7 @@ Razorpay's own wording, and where each piece of it lives in this repo:
 |---|---|
 | "detects revenue at risk... payment failures and checkout abandonment to overdue receivables" | `core/schema.py` unifies all three; `data/generate_synthetic.py` generates realistic mixes of each |
 | "determines the right intervention" | `core/classifier.py` diagnosis + `core/prioritizer.py` EV + `core/policy.py` (deterministic) / `core/contextual_bandit.py` (learned) |
-| "executes a bounded recovery workflow" | `core/compliance.py` (NPCI + AR-aging stopping rules) + `core/approval.py` (human sign-off gate) bound every execution |
+| "executes a bounded recovery workflow" | `core/compliance.py` (NPCI + AR-aging stopping rules) + `core/approval.py` (human sign-off gate) bound every execution; every case's exact lifecycle is an explicit, inspectable timeline (`DecisionRecord.timeline`), not just a final decision |
 | "measured money recovered across a batch" | `run_evaluation.py`, `core/metrics.py` -- real numbers below, not claims |
 | "compliant escalation, stopping rules" | `core/rules.yaml` (versioned, auditable) + `tests/test_compliance.py` |
 | "an audit trail" | `core/audit.py` SHA-256 hash chain + `tests/test_audit_chain.py` proving tamper detection |
@@ -114,6 +139,7 @@ Razorpay's own wording, and where each piece of it lives in this repo:
 | Example: "Mandate retry sequencing" | `core/compliance.py`'s NPCI e-mandate rules (max 3 retries, 24h gap, 24h post-creation cooldown) |
 | Example: "Promise-to-pay tracking" | `core/promise_tracking.py` -- and it *feeds back* into the next invoice's EV, not just logged |
 | Example: "Voice-based recovery (Hinglish supported)" | `core/voice_recovery.py` -- generates a real Hinglish call script per case via a live LLM call |
+| (not named, added anyway) real payment execution | `core/payment_links.py` -- creates a genuine Razorpay test-mode Payment Link on demand, using the same credentials already required for webhooks |
 
 ---
 
@@ -172,10 +198,22 @@ surfaced 56 genuinely pending cases (large collections escalations, large
 discounts, suspected-fraud cases) that paused for approval instead of
 executing unattended — verified live in the dashboard, not just in tests.
 
-**Tests**: 61/61 passing (`python -m pytest tests/ -v`), including audit-chain
+**Real Razorpay Payment Link creation**: on demand, per case, using your own
+test-mode credentials — verified with an actual live API call that produced
+a real, clickable `https://rzp.io/rzp/...` test-mode link (test mode: no
+real money moves). Not wired into automatic batch runs, so generating a
+batch never spams Razorpay's API.
+
+**Per-case state-machine timeline**: every decision's exact lifecycle
+(ingested → diagnosed → prioritized → compliance-checked → action-selected
+→ [pending approval →] executed → audited) is an explicit, timestamped
+sequence, not just a final answer — rendered as a stepper in the dashboard.
+
+**Tests**: 70/70 passing (`python -m pytest tests/ -v`), including audit-chain
 tamper detection, all compliance rules (NPCI + B2B AR-aging), a seeded
 systemic-incident spike, idempotent webhook ingestion, Razorpay signature
-verification, promise-tracking feedback, the approval gate, and the FastAPI
+verification, promise-tracking feedback, the approval gate, real payment-link
+creation's fallback paths, the case-timeline state machine, and the FastAPI
 backend (including a live WebSocket replay test).
 
 ---
@@ -198,7 +236,7 @@ python portfolio_demo.py --seed 55 --capacity-hours 20
 # promise-to-pay reliability feedback loop
 python promise_tracking_demo.py --n 1500 --seed 7
 
-# full test suite (61 tests across every module above, plus the API)
+# full test suite (70 tests across every module above, plus the API)
 python -m pytest tests/ -v
 
 # dashboards -- React (primary) needs both processes running:
@@ -295,6 +333,16 @@ Rigor means showing the mistakes, not just the passing tests.
    run's id with the old event_id. Found via a live 404 in the browser
    network log while testing the actual UI, not by code inspection. Fixed
    by clearing `selected` synchronously when `runId` changes.
+6. **A second, sneakier version of bug #5 survived that fix**: React 18
+   StrictMode double-invokes effects in development, so the app's mount
+   effect created two backend runs, and a slow first fetch could resolve
+   *after* the second run had already taken over -- applying stale data
+   late instead of it being stale at read time. Fix #5 didn't cover this
+   because it's a stale *response*, not stale *state*. Fixed with the
+   standard cancelled-flag guard on every async effect, plus a monotonic
+   request-id ref in `App.tsx` so only the latest `generateRun` call's
+   response is ever applied. Verified with a genuinely single, isolated
+   browser session showing exactly one run_id for its whole lifetime.
 
 ---
 
@@ -378,7 +426,7 @@ backend/
 frontend/                  React + Vite + TypeScript dashboard (primary UI)
 dashboard/
   app.py                   Streamlit dashboard (lighter alternative)
-tests/                     61 tests across every module above plus the API
+tests/                     70 tests across every module above plus the API
 run_evaluation.py           baseline vs agent, multi-seed
 bandit_convergence_demo.py  bandit convergence proof
 portfolio_demo.py           knapsack vs greedy proof
