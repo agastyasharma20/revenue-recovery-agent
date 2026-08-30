@@ -1,6 +1,25 @@
-# AI Revenue Recovery Agent
+<div align="center">
 
-Built for the Razorpay AI Buildathon — Track 03: AI Revenue Recovery.
+# 💸 AI Revenue Recovery Agent
+
+**Detect. Diagnose. Decide. Recover. Prove it.**
+
+Built for the **Razorpay AI Buildathon — Track 03: AI Revenue Recovery**
+
+[![Tests](https://img.shields.io/badge/tests-87%2F87%20passing-brightgreen?style=for-the-badge)](#reproduce-every-number)
+[![Python](https://img.shields.io/badge/python-3.12-blue?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![React](https://img.shields.io/badge/React-Vite%20%2B%20TS-61DAFB?style=for-the-badge&logo=react&logoColor=white)](frontend/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-WebSocket-009688?style=for-the-badge&logo=fastapi&logoColor=white)](backend/)
+[![Razorpay](https://img.shields.io/badge/Razorpay-Test%20Mode%20Live-0C2340?style=for-the-badge&logo=razorpay&logoColor=3395FF)](core/payment_links.py)
+[![Groq](https://img.shields.io/badge/Groq-LLM-F55036?style=for-the-badge)](core/llm_client.py)
+[![Gemini](https://img.shields.io/badge/Gemini-fallback-4285F4?style=for-the-badge&logo=google&logoColor=white)](core/llm_client.py)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow?style=for-the-badge)](LICENSE)
+
+*20+ commits, one per real change. 6 real bugs found and fixed in the open. Every number below is a command, not a claim.*
+
+</div>
+
+---
 
 An agent that detects revenue at risk across failed subscription/mandate
 payments, abandoned checkouts, and overdue B2B invoices; diagnoses *why* each
@@ -13,6 +32,43 @@ This README is written to be checked, not taken on faith: every number below
 came from a command you can re-run yourself (see "Reproduce every number"),
 and "What's simulated vs real" says plainly which parts are a controlled
 simulation and which touch real infrastructure.
+
+> ### TL;DR
+> A naive "retry everything" bot recovers **11.0%** of what it chases. This
+> agent recovers **36.9%** — same synthetic batch, same 5 seeds, agent wins
+> net INR recovered **5/5 times**. It costs **₹0.003 per decision** to run
+> (measured, not estimated), learns its own action-per-failure-type mapping
+> from scratch with **zero hardcoded rules** (12/12 match against ground
+> truth), and creates **real, clickable Razorpay test-mode payment links**
+> on demand. Full honesty section below on exactly what's simulated vs real.
+
+## Table of contents
+- [Screenshots](#screenshots)
+- [Architecture](#architecture)
+- [Mapped to Track 03's actual bar](#mapped-to-track-03s-actual-bar)
+- [Headline results](#headline-results-from-the-runs-below-not-cherry-picked)
+- [Reproduce every number](#reproduce-every-number)
+- [What's simulated vs. real](#whats-simulated-vs-real--read-this-before-presenting-any-number)
+- [Real bugs caught during development](#real-bugs-caught-during-development-left-in-this-readme-on-purpose)
+- [Judge Q&A cheat sheet](#judge-qa-cheat-sheet)
+- [Repository layout](#repository-layout)
+- [Setup](#setup)
+- [5-minute pitch video outline](#5-minute-pitch-video-outline)
+
+---
+
+## Screenshots
+
+*Live captures from the actual running dashboard — same seed, same data, no mockups.*
+
+**Incident detection, live counter, and the human-approval queue in one view:**
+![Dashboard hero: incident banner, live recovery counter, approval queue](docs/screenshots/01-hero.png)
+
+**Full per-case explainability — diagnosis, EV math, compliance, and the bounded-workflow timeline:**
+![Case drill-down with lifecycle timeline and hash-chain evidence](docs/screenshots/03-case-timeline.png)
+
+**The bandit's convergence, and what it independently learned vs. the oracle:**
+![LinUCB contextual bandit convergence chart and learned-vs-oracle table](docs/screenshots/04-bandit-convergence.png)
 
 ---
 
