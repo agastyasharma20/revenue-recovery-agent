@@ -14,6 +14,9 @@ Built for the **Razorpay AI Buildathon — Track 03: AI Revenue Recovery**
 [![Gemini](https://img.shields.io/badge/Gemini-fallback-4285F4?style=for-the-badge&logo=google&logoColor=white)](core/llm_client.py)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow?style=for-the-badge)](LICENSE)
 
+### 🔴 [Live demo — revenue-recovery-agent-5b31.onrender.com](https://revenue-recovery-agent-5b31.onrender.com)
+*Free-tier host: sleeps after 15 min idle. If it's your first click in a while, give it ~30–50s to wake up.*
+
 </div>
 
 ---
@@ -47,10 +50,13 @@ simulation and which touch real infrastructure.
 - [Reproduce every number](#reproduce-every-number)
 - [What's simulated vs. real](#whats-simulated-vs-real--read-this-before-presenting-any-number)
 - [Real bugs caught during development](#real-bugs-caught-during-development-left-in-this-readme-on-purpose)
-- [Judge Q&A cheat sheet](#judge-qa-cheat-sheet)
 - [Repository layout](#repository-layout)
 - [Setup](#setup)
-- [5-minute pitch video outline](#5-minute-pitch-video-outline)
+- [Deploy your own copy](#deploy-your-own-copy)
+
+*Pitch-video shot list and Judge Q&A rehearsal notes live in
+[`docs/prep-notes.md`](docs/prep-notes.md) — kept out of this README because
+they're rehearsal material for us, not something a judge needs to read here.*
 
 ---
 
@@ -428,87 +434,6 @@ Rigor means showing the mistakes, not just the passing tests.
 
 ---
 
-## Judge Q&A cheat sheet
-
-**"Is this number real or simulated?"** — Every number in this README says
-so explicitly in "What's simulated vs real" above. Short version: the
-decision logic is 100% real code; the payments data and outcomes are a
-controlled simulation; the Groq LLM calls are real API calls with measured
-(not assumed) success rates; Razorpay webhook signature verification is
-real; live Razorpay/WhatsApp/telephony delivery is not yet tested.
-
-**"Why does the agent recover so much more money than the baseline?"** — See
-the honesty note under Headline results: it's almost entirely B2B invoice
-recovery, which a naive retry-everything baseline structurally cannot touch.
-The recovery-*rate* comparison (36.9% vs 11.0%) is the fairer number and
-still favors the agent by more than 3x, consistently across seeds.
-
-**"Couldn't the bandit just be memorizing the outcome simulator's
-probabilities?"** — No: it only ever sees a reward signal (recovered:
-0/1) per (context, action) pair, never the probability itself, and it's
-handed the *full* action set every round with zero reason→action mapping
-coded anywhere in `core/contextual_bandit.py` or `core/policy.py`'s
-`BANDIT_ARMS`. What it converges to is compared *against* the oracle
-matrix purely for scoring, after the fact.
-
-**"What happens if the LLM API is down?"** — `core/circuit_breaker.py` trips
-after 3 consecutive failures and stops calling it for a cooldown window;
-the rule-based classifier keeps the whole pipeline running regardless. This
-is tested with a genuinely invalid key, not asserted.
-
-**"What stops the agent from retrying someone forever, or contacting them
-at 3am?"** — `core/compliance.py` + `core/rules.yaml`: max 3 retries, 24h
-min gap between retries, a 7-day (subscriptions) or 90-day (B2B) pursuit
-window, and a 24h post-mandate-creation cooldown. All versioned in YAML,
-not hardcoded, so a compliance team could review/change them without a
-code deploy.
-
-**"What stops it from auto-approving a huge or fraud-flagged action?"** —
-`core/approval.py`: collections escalations over ₹1,00,000, discounts over
-₹20,000, and anything diagnosed as a risk block (suspected fraud) require
-human sign-off in HITL mode (`RecoveryEngine(auto_approve=False)`) — the
-action is proposed and logged but not executed until approved or rejected.
-
-**"Is the audit trail actually tamper-evident, or just a log file?"** —
-SHA-256 hash chain: each record embeds the previous record's hash.
-`tests/test_audit_chain.py` proves altering, deleting, or reordering any
-single record is detected and pinpointed to the exact index.
-
-**"Where did you get stuck?"** — Integrating the Groq LLM call, and it took
-three separate misdiagnoses to actually fix. First symptom: every call
-failed with a generic network error even with a real key. Root cause:
-Groq's Cloudflare front-end blocks `urllib`'s default User-Agent before the
-request ever reaches Groq's API (`core/llm_client.py`, the `User-Agent`
-header on both provider calls). Fixed that, got a *different* failure: the
-originally-hardcoded model had been retired from Groq's lineup entirely —
-found by calling `GET /openai/v1/models` directly instead of guessing.
-Fixed that, got a *third* failure: the replacement is a reasoning model
-that can spend its entire token budget on hidden reasoning and return
-empty content, which looked like a parsing bug until I checked
-`finish_reason` and `usage.reasoning_tokens` in the raw response. Each
-fix revealed the next problem instead of resolving the whole thing, which
-is what actually made it "stuck" rather than just a one-line bug — the
-same root-cause discipline is what later caught the ML model's misleading
-recall number (see "Real bugs caught" above) and a real async race in the
-React frontend. All three Groq fixes now live in one shared module
-(`core/llm_client.py`) specifically so they can't be silently re-broken by
-a second call site, which is exactly what happened when `voice_recovery.py`
-was added afterward and needed the same fixes.
-
-**"You mentioned Razorpay has an official MCP server
-(`razorpay/razorpay-mcp-server`) — did you use it?"** — No, and saying so
-plainly: `core/payment_links.py` and `core/razorpay_integration.py` call
-Razorpay's REST API directly via their Python SDK. Wiring the agent's
-action-selection layer to call Razorpay's MCP server as an LLM tool
-instead would be a more "agentic" design (the model deciding to invoke a
-payment-link tool rather than deterministic code calling a function) and
-is a natural next step, deliberately not attempted this close to a
-deadline given this project's explicit stance that AI proposes and
-deterministic code executes — swapping the payment-execution path to an
-LLM-driven tool call needs its own careful bounding, not a rushed one.
-
----
-
 ## Repository layout
 
 ```
@@ -595,32 +520,34 @@ python webhook_server.py
 
 ---
 
-## 5-minute pitch video outline
+## Deploy your own copy
 
-A suggested shot list, timed for a 5-minute cap:
+The live demo above is exactly this: one free Render web service. There's
+no separate frontend host and no CORS config needed, because
+`backend/main.py` mounts the built React app (`frontend/dist`) as static
+files at `/`, *after* every `/api` and `/ws` route — one process, one URL.
 
-1. **(0:00–0:30) The problem, in one line.** State the Track 03 bar verbatim
-   on screen: *"Don't just identify the problem. Show measured money
-   recovered across a batch, with compliant escalation, stopping rules, and
-   an audit trail."* Say this is exactly what you built to answer.
-2. **(0:30–1:15) Architecture, fast.** Show the ASCII diagram (or redraw it
-   simply) — ingest → diagnose → prioritize → compliance → approve → act →
-   outcome → audit. One sentence per stage, no more.
-3. **(1:15–2:30) Live demo in the React dashboard.** Load it, point at: the
-   systemic-incident banner (mention it collapses 15 individual failures
-   into one incident), click "Replay live" and let the counter animate,
-   drill into one case and show the full diagnosis → EV → compliance →
-   action → hash-chain trail, generate a Hinglish voice script live.
-4. **(2:30–3:15) The two things that make this more than a reminder bot.**
-   Show the bandit convergence chart (12/12 learned-vs-oracle match, no
-   hardcoded mapping) and the knapsack-vs-greedy comparison. Say the
-   numbers plainly, including where the knapsack gap is small — that
-   honesty is a feature, not a weakness.
-5. **(3:15–4:00) Governance.** Toggle HITL mode, show the approval queue
-   with real pending cases, approve one and reject one live.
-6. **(4:00–4:40) The numbers, and the honesty about them.** State the
-   36.9% vs 11.0% recovery-rate result, and immediately name the B2B-driven
-   rupee-scale caveat before a judge can ask about it.
-7. **(4:40–5:00) Close.** One sentence on what's real vs simulated (LLM
-   calls and Razorpay signature verification are real; payments data is a
-   controlled simulation), and where the code lives.
+```mermaid
+flowchart LR
+    U["Browser"] -->|"GET /"| S["Single Render web service<br/>uvicorn backend.main:app"]
+    U -->|"GET/POST /api/*"| S
+    U -->|"WS /ws/*"| S
+    S -->|"static files, html=True"| F["frontend/dist<br/>(built React app)"]
+    S -->|"imports directly, no network hop"| C["core/ decision engine"]
+    C -.->|"optional"| G["Groq / Gemini LLM APIs"]
+    C -.->|"optional, on demand"| R["Razorpay test-mode API"]
+```
+
+1. Fork or clone this repo, push it to your own GitHub.
+2. [dashboard.render.com](https://dashboard.render.com) → **New +** →
+   **Blueprint** → connect the repo. Render reads [`render.yaml`](render.yaml)
+   and auto-fills the build/start commands and Python version.
+3. Fill in the env vars the blueprint marks `sync: false` (your own
+   Razorpay test-mode keys + Groq key, from `.env` locally — never commit
+   these). `GEMINI_API_KEY` is optional; the multi-provider fallback works
+   without it.
+4. Deploy. First build takes ~3–5 min (`pip install` + `npm install && npm run build`).
+
+Free-tier caveat, stated plainly: the service sleeps after 15 minutes idle,
+and the first request after sleeping takes ~30–50s to wake up. Not a bug —
+just worth opening the link a minute before you need it live.
