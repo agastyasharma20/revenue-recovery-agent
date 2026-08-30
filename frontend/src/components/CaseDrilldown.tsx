@@ -176,6 +176,24 @@ export function CaseDrilldown({ runId }: { runId: string }) {
             </div>
           )}
 
+          {detail && detail.payload.timeline.length > 0 && (
+            <div style={{ marginTop: 18 }}>
+              <h4 style={{ fontSize: 13, marginBottom: 10 }}>Case lifecycle (bounded recovery workflow)</h4>
+              <div className="timeline">
+                {detail.payload.timeline.map((step, i) => (
+                  <div className="timeline-step" key={i}>
+                    <div className="timeline-dot" />
+                    <div className="timeline-body">
+                      <div className="timeline-stage">{step.stage.replace(/_/g, ' ')}</div>
+                      <div className="timeline-note">{step.note}</div>
+                      <div className="timeline-time">{new Date(step.at).toLocaleTimeString()}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {detail && (
             <div style={{ marginTop: 18 }}>
               <button className="btn btn-secondary" onClick={loadScript} disabled={scriptLoading} style={{ marginRight: 8 }}>

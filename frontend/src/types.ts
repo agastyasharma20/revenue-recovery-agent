@@ -59,6 +59,7 @@ export interface CaseDetail {
     chosen_action: string
     outcome: { recovered: boolean; probability_used: number; amount_recovered: number } | null
     promise: { promise_id: string; status: string; promised_date: string; amount: number } | null
+    timeline: { stage: string; at: string; note: string }[]
   }
   audit_chain: { prev_hash: string; this_hash: string; logged_at: string } | null
 }

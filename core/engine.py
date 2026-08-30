@@ -44,6 +44,13 @@ class DecisionRecord:
     requires_approval: bool = False
     approval_reason: str = ""
     approval_status: str = "not_required"
+    # Explicit lifecycle: named states + timestamps + a short human-readable
+    # note, in the order they actually happened. This is what makes "bounded
+    # recovery workflow" a checkable claim rather than a description -- the
+    # same information latencies_ms/logger already capture, just structured
+    # as a named state machine so a dashboard can render it as a timeline/
+    # stepper instead of a flat log.
+    timeline: list = field(default_factory=list)
 
     @property
     def recovered_amount(self) -> float:
@@ -95,6 +102,7 @@ class DecisionRecord:
                 "reason": self.approval_reason,
                 "status": self.approval_status,
             },
+            "timeline": self.timeline,
         }
 
 
@@ -159,6 +167,10 @@ class RecoveryEngine:
         if self.logger is not None:
             self.logger.info(message, extra={"trace_id": trace_id, "layer": layer})
 
+    @staticmethod
+    def _timeline_entry(stage: str, note: str, now: datetime) -> dict:
+        return {"stage": stage, "at": now.isoformat(), "note": note}
+
     def _execute_action(self, event: RevenueEvent, chosen_action: Action, now: datetime):
         """The actual "do it" step -- outcome simulation, bandit feedback,
         promise recording. Shared by the autonomous/auto-approved path and
@@ -172,13 +184,23 @@ class RecoveryEngine:
         return outcome, promise
 
     def process_event(self, event: RevenueEvent, now: Optional[datetime] = None) -> DecisionRecord:
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(timezone.utc)  # BUSINESS time -- what compliance/rules evaluate against
         trace_id = event.trace_id
         latencies: dict[str, float] = {}
+        # timeline entries use real wall-clock time (distinct from `now`
+        # above), because that's what's actually informative here: the
+        # automated stages happen microseconds apart (worth showing --
+        # proves the pipeline is fast), and a pending-approval case's gap
+        # between "proposed" and "approved" is real elapsed time until a
+        # human acts, not a business-time artifact.
+        timeline = [self._timeline_entry("ingested", f"{event.source.value} event received", datetime.now(timezone.utc))]
 
         t0 = time.perf_counter()
         diagnosis = self.classifier.diagnose(event)
         latencies["diagnose"] = (time.perf_counter() - t0) * 1000
+        timeline.append(self._timeline_entry(
+            "diagnosed", f"{diagnosis.category.value} (confidence {diagnosis.confidence:.2f})", datetime.now(timezone.utc)
+        ))
         self._log(trace_id, "diagnose", f"category={diagnosis.category.value} confidence={diagnosis.confidence:.2f} llm_used={diagnosis.llm_used}")
 
         t0 = time.perf_counter()
@@ -192,6 +214,9 @@ class RecoveryEngine:
         )
         priority = prioritize(event, diagnosis, customer_reliability=customer_reliability)
         latencies["prioritize"] = (time.perf_counter() - t0) * 1000
+        timeline.append(self._timeline_entry(
+            "prioritized", f"EV={priority.ev:,.2f} pursue={priority.pursue}", datetime.now(timezone.utc)
+        ))
         self._log(trace_id, "prioritize", f"ev={priority.ev:.2f} pursue={priority.pursue}")
 
         t0 = time.perf_counter()
@@ -200,16 +225,32 @@ class RecoveryEngine:
         if not priority.pursue:
             chosen_action = Action.NO_ACTION_DO_NOT_PURSUE
             compliance_result = ComplianceResult(True, "Not pursued (negative EV) -- compliance N/A.", self.compliance.version)
+            timeline.append(self._timeline_entry("closed", "negative EV -- not pursued", datetime.now(timezone.utc)))
         else:
             chosen_action, compliance_result = self._select_action(event, diagnosis, now)
-            if chosen_action != Action.NO_ACTION_DO_NOT_PURSUE:
+            timeline.append(self._timeline_entry(
+                "compliance_checked",
+                f"{'allowed' if compliance_result.allowed else 'blocked'}: {compliance_result.reason}",
+                datetime.now(timezone.utc),
+            ))
+            if chosen_action == Action.NO_ACTION_DO_NOT_PURSUE:
+                timeline.append(self._timeline_entry("closed", "no compliant action available", datetime.now(timezone.utc)))
+            else:
+                timeline.append(self._timeline_entry("action_selected", chosen_action.value, datetime.now(timezone.utc)))
                 decision = self.approval_gate.check(event, diagnosis, chosen_action)
                 requires_approval, approval_reason = decision.required, decision.reason
                 if requires_approval and not self.auto_approve:
                     approval_status = "pending"  # execution deferred -- see approve()/reject()
+                    timeline.append(self._timeline_entry("pending_approval", approval_reason, datetime.now(timezone.utc)))
                 else:
                     approval_status = "auto_approved" if requires_approval else "not_required"
+                    if requires_approval:
+                        timeline.append(self._timeline_entry("auto_approved", approval_reason, datetime.now(timezone.utc)))
                     outcome, promise = self._execute_action(event, chosen_action, now)
+                    timeline.append(self._timeline_entry(
+                        "executed", f"{'recovered' if outcome.recovered else 'not recovered'} (p={outcome.probability_used:.2f})",
+                        datetime.now(timezone.utc),
+                    ))
         latencies["policy_and_compliance"] = (time.perf_counter() - t0) * 1000
         self._log(
             trace_id, "policy",
@@ -229,12 +270,14 @@ class RecoveryEngine:
             requires_approval=requires_approval,
             approval_reason=approval_reason,
             approval_status=approval_status,
+            timeline=timeline,
         )
 
         t0 = time.perf_counter()
         if self.audit is not None:
             self.audit.append(record.to_audit_payload())
         latencies["audit"] = (time.perf_counter() - t0) * 1000
+        timeline.append(self._timeline_entry("audited", "appended to hash-chained audit log", datetime.now(timezone.utc)))
         self._log(trace_id, "audit", "decision appended to hash-chained audit log")
 
         if approval_status == "pending":
@@ -250,8 +293,14 @@ class RecoveryEngine:
         if record is None:
             raise KeyError(f"No pending approval for event_id={event_id}")
 
+        wall_now = datetime.now(timezone.utc)
+        record.timeline.append(self._timeline_entry("approved", "human authorized -- executing now", wall_now))
         record.outcome, record.promise = self._execute_action(record.event, record.chosen_action, now)
         record.approval_status = "approved"
+        record.timeline.append(self._timeline_entry(
+            "executed", f"{'recovered' if record.outcome.recovered else 'not recovered'} (p={record.outcome.probability_used:.2f})",
+            datetime.now(timezone.utc),
+        ))
         if self.audit is not None:
             self.audit.append(record.to_audit_payload())  # second, later audit entry -- a real resolution trail
         return record
@@ -264,6 +313,7 @@ class RecoveryEngine:
 
         record.approval_status = "rejected"
         record.approval_reason = f"{record.approval_reason} | REJECTED: {reason}"
+        record.timeline.append(self._timeline_entry("rejected", reason, datetime.now(timezone.utc)))
         if self.audit is not None:
             self.audit.append(record.to_audit_payload())
         return record
