@@ -2,6 +2,14 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import type { CaseSummary, CaseDetail, AuditVerifyResult, VoiceScript } from '../types'
 
+interface PaymentLinkState {
+  applicable: boolean
+  created?: boolean
+  link_url?: string | null
+  error?: string | null
+  message?: string
+}
+
 export function CaseDrilldown({ runId }: { runId: string }) {
   const [cases, setCases] = useState<CaseSummary[]>([])
   const [selected, setSelected] = useState<string>('')
@@ -9,31 +17,57 @@ export function CaseDrilldown({ runId }: { runId: string }) {
   const [verify, setVerify] = useState<AuditVerifyResult | null>(null)
   const [script, setScript] = useState<VoiceScript | null>(null)
   const [scriptLoading, setScriptLoading] = useState(false)
+  const [paymentLink, setPaymentLink] = useState<PaymentLinkState | null>(null)
+  const [paymentLinkLoading, setPaymentLinkLoading] = useState(false)
 
   useEffect(() => {
     // Clear `selected` (not just `detail`) the moment runId changes -- the
     // effect below fires on [runId, selected], and without this, one
     // render slips through where runId is already the NEW run but
     // `selected` still holds the PREVIOUS run's event_id, firing a
-    // guaranteed-404 getCaseDetail(newRunId, oldEventId) request. Caught
-    // via a live 404 in the network log while testing "generate new batch"
-    // in the actual browser, not by inspection alone.
+    // guaranteed-404 getCaseDetail(newRunId, oldEventId) request.
+    //
+    // `cancelled` guards a SEPARATE, sneakier race on top of that: if
+    // runId changes again before this effect's own fetch resolves (React
+    // 18 StrictMode double-invokes effects in dev, so this reliably
+    // happens on first mount alone; two fast "Generate new batch" clicks
+    // would do the same in production), the late .then() would otherwise
+    // apply run-A's case list and select run-A's first event_id AFTER
+    // runId has already moved to run-B -- which then fires the exact same
+    // guaranteed-404 getCaseDetail(runB, eventFromRunA) the guard above
+    // was written to prevent, just via a different path. Caught live via
+    // interleaved run_ids in the backend's request log, not by inspection.
+    let cancelled = false
     setCases([])
     setSelected('')
     setDetail(null)
     setScript(null)
+    setPaymentLink(null)
     setVerify(null)
     api.getCases(runId, true, 200).then((c) => {
+      if (cancelled) return
       setCases(c)
       if (c.length > 0) setSelected(c[0].event_id)
     })
-    api.verifyAudit(runId).then(setVerify)
+    api.verifyAudit(runId).then((v) => {
+      if (!cancelled) setVerify(v)
+    })
+    return () => {
+      cancelled = true
+    }
   }, [runId])
 
   useEffect(() => {
     if (!selected) return
+    let cancelled = false
     setScript(null)
-    api.getCaseDetail(runId, selected).then(setDetail)
+    setPaymentLink(null)
+    api.getCaseDetail(runId, selected).then((d) => {
+      if (!cancelled) setDetail(d)
+    })
+    return () => {
+      cancelled = true
+    }
   }, [runId, selected])
 
   const loadScript = async () => {
@@ -42,6 +76,15 @@ export function CaseDrilldown({ runId }: { runId: string }) {
       setScript(await api.getVoiceScript(runId, selected))
     } finally {
       setScriptLoading(false)
+    }
+  }
+
+  const loadPaymentLink = async () => {
+    setPaymentLinkLoading(true)
+    try {
+      setPaymentLink(await api.createPaymentLink(runId, selected))
+    } finally {
+      setPaymentLinkLoading(false)
     }
   }
 
@@ -135,9 +178,36 @@ export function CaseDrilldown({ runId }: { runId: string }) {
 
           {detail && (
             <div style={{ marginTop: 18 }}>
-              <button className="btn btn-secondary" onClick={loadScript} disabled={scriptLoading}>
+              <button className="btn btn-secondary" onClick={loadScript} disabled={scriptLoading} style={{ marginRight: 8 }}>
                 {scriptLoading ? '🎙️ Generating…' : '🎙️ Generate Hinglish voice-recovery script'}
               </button>
+              <button className="btn btn-secondary" onClick={loadPaymentLink} disabled={paymentLinkLoading}>
+                {paymentLinkLoading ? '💳 Creating…' : '💳 Create real Razorpay payment link'}
+              </button>
+
+              {paymentLink && (
+                <div style={{ marginTop: 12 }}>
+                  {!paymentLink.applicable ? (
+                    <p style={{ fontSize: 12, color: 'var(--text-faint)' }}>{paymentLink.message}</p>
+                  ) : paymentLink.created ? (
+                    <div className="script-line">
+                      <span className="tag">Real Razorpay test-mode payment link</span>
+                      <a href={paymentLink.link_url ?? '#'} target="_blank" rel="noreferrer">{paymentLink.link_url}</a>
+                      <p style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 4 }}>
+                        This is a genuine Razorpay test-mode Payment Link created via a live API call —
+                        not a mock URL. Test mode: no real money moves.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="banner banner-danger" style={{ fontSize: 12 }}>
+                      Could not create a real link: {paymentLink.error === 'no_razorpay_credentials'
+                        ? 'RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET not configured on the backend.'
+                        : paymentLink.error}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {script && (
                 <div style={{ marginTop: 12 }}>
                   <div style={{ marginBottom: 8 }}>

@@ -24,6 +24,7 @@ from core.audit import AuditLog, verify_chain
 from core.metrics import summarize
 from core.portfolio import build_cases, compare as portfolio_compare
 from core.voice_recovery import generate_voice_script
+from core.payment_links import create_payment_link
 from core.contextual_bandit import LinUCBBandit, build_context
 from core.policy import BANDIT_ARMS
 from core.outcome_simulator import simulate_outcome, EFFECTIVENESS_MATRIX
@@ -252,6 +253,34 @@ def get_voice_script(run_id: str, event_id: str):
 
     script = generate_voice_script(record.event, record.diagnosis)
     return script.to_dict()
+
+
+@app.post("/api/runs/{run_id}/cases/{event_id}/payment-link")
+def get_payment_link(run_id: str, event_id: str):
+    """On-demand only -- never called automatically for a whole batch, so
+    generating a run never spams Razorpay's API. Creates a REAL test-mode
+    Razorpay Payment Link using RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET, when
+    the case's chosen action is one that plausibly involves a payment link
+    (retry-with-alt-method, update-payment-method, discount, collections)."""
+    run = _get_run_or_404(run_id)
+    record = next((r for r in run.records if r.event.event_id == event_id), None)
+    if record is None:
+        raise HTTPException(404, "event_id not found in this run")
+
+    result = create_payment_link(record.event, record.chosen_action)
+    if result is None:
+        return {
+            "applicable": False,
+            "message": f"Action '{record.chosen_action.value}' doesn't involve a payment link.",
+        }
+    return {
+        "applicable": True,
+        "created": result.created,
+        "link_url": result.link_url,
+        "payment_link_id": result.payment_link_id,
+        "amount_charged": result.amount_charged,
+        "error": result.error,
+    }
 
 
 # --- human-in-the-loop approvals ---

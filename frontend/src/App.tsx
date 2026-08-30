@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, type CreateRunParams } from './api'
 import type { MetricsSummary, Incident } from './types'
 import { Sidebar } from './components/Sidebar'
@@ -27,19 +27,31 @@ export default function App() {
   const [incidents, setIncidents] = useState<Incident[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Guards the same class of out-of-order-response race fixed in
+  // CaseDrilldown: React 18 StrictMode double-invokes effects in dev, so
+  // the mount effect below actually calls generateRun twice, creating two
+  // backend runs. Without this, whichever HTTP response happens to land
+  // LAST wins -- usually the second call, but not guaranteed under real
+  // network jitter -- silently leaving the UI on a run whose id doesn't
+  // match latest intent. A monotonically increasing ref makes "latest
+  // request wins" explicit instead of "whichever resolves last wins."
+  const latestRequestId = useRef(0)
 
   const generateRun = async (p: CreateRunParams) => {
+    const requestId = ++latestRequestId.current
     setLoading(true)
     setError(null)
     try {
       const resp = await api.createRun(p)
+      if (requestId !== latestRequestId.current) return // a newer request has since started; drop this one
       setRunId(resp.run_id)
       setSummary(resp.summary)
       setIncidents(resp.incidents)
     } catch (e) {
+      if (requestId !== latestRequestId.current) return
       setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setLoading(false)
+      if (requestId === latestRequestId.current) setLoading(false)
     }
   }
 

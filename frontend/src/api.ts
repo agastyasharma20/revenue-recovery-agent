@@ -47,6 +47,10 @@ export const api = {
   getPromises: (runId: string) => getJSON<PromisesResult>(`/runs/${runId}/promises`),
   getVoiceScript: (runId: string, eventId: string) =>
     postJSON<VoiceScript>(`/runs/${runId}/cases/${eventId}/voice-script`),
+  createPaymentLink: (runId: string, eventId: string) =>
+    postJSON<{ applicable: boolean; created?: boolean; link_url?: string | null; payment_link_id?: string | null; amount_charged?: number; error?: string | null; message?: string }>(
+      `/runs/${runId}/cases/${eventId}/payment-link`,
+    ),
   getPendingApprovals: (runId: string) => getJSON<CaseSummary[]>(`/runs/${runId}/pending-approvals`),
   approveCase: (runId: string, eventId: string) =>
     postJSON<CaseSummary>(`/runs/${runId}/cases/${eventId}/approve`),
