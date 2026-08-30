@@ -45,6 +45,7 @@ class RunStore:
         policy_mode: str = "deterministic",
         inject_spike: bool = True,
         use_llm: bool = False,
+        auto_approve: bool = True,
         now: Optional[datetime] = None,
     ) -> RunState:
         now = now or datetime(2026, 8, 29, 12, 0, 0, tzinfo=timezone.utc)
@@ -76,6 +77,7 @@ class RunStore:
             audit_path=audit_path,
             seed=seed * 1000 + 2,
             log_path=None,
+            auto_approve=auto_approve,
         )
         records = engine.process_batch(events, now=now)
         incidents = detect_systemic_incidents(events, window_hours=2.0, threshold=15)

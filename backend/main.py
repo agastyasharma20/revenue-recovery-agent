@@ -52,6 +52,7 @@ class CreateRunRequest(BaseModel):
     policy_mode: str = "deterministic"
     inject_spike: bool = True
     use_llm: bool = False
+    auto_approve: bool = True
 
 
 def _get_run_or_404(run_id: str) -> RunState:
@@ -71,10 +72,16 @@ def _case_summary(r) -> dict:
         "customer_id": r.event.customer_id,
         "chosen_action": r.chosen_action.value,
         "pursued": r.pursued,
-        "recovered": bool(r.outcome and r.outcome.recovered),
+        # None (not False) when nothing has executed yet -- a pending or
+        # rejected approval has no outcome at all, which is a different
+        # thing from "executed and failed to recover."
+        "recovered": (r.outcome.recovered if r.outcome else None),
         "recovered_amount": r.recovered_amount,
         "ev": round(r.priority.ev, 2),
         "diagnosis_category": r.diagnosis.category.value,
+        "requires_approval": r.requires_approval,
+        "approval_status": r.approval_status,
+        "approval_reason": r.approval_reason,
     }
 
 
@@ -98,7 +105,7 @@ def create_run(req: CreateRunRequest):
 
     run = run_store.create_run(
         n=req.n, seed=req.seed, policy_mode=req.policy_mode,
-        inject_spike=req.inject_spike, use_llm=req.use_llm,
+        inject_spike=req.inject_spike, use_llm=req.use_llm, auto_approve=req.auto_approve,
     )
     metrics = summarize(run.records)
     return {
@@ -245,6 +252,38 @@ def get_voice_script(run_id: str, event_id: str):
 
     script = generate_voice_script(record.event, record.diagnosis)
     return script.to_dict()
+
+
+# --- human-in-the-loop approvals ---
+
+
+@app.get("/api/runs/{run_id}/pending-approvals")
+def get_pending_approvals(run_id: str):
+    run = _get_run_or_404(run_id)
+    return [
+        {**_case_summary(r), "approval_reason": r.approval_reason}
+        for r in run.engine.pending_approvals.values()
+    ]
+
+
+@app.post("/api/runs/{run_id}/cases/{event_id}/approve")
+def approve_case(run_id: str, event_id: str):
+    run = _get_run_or_404(run_id)
+    try:
+        record = run.engine.approve(event_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    return _case_summary(record)
+
+
+@app.post("/api/runs/{run_id}/cases/{event_id}/reject")
+def reject_case(run_id: str, event_id: str, reason: str = "rejected by reviewer"):
+    run = _get_run_or_404(run_id)
+    try:
+        record = run.engine.reject(event_id, reason=reason)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+    return _case_summary(record)
 
 
 # --- bandit convergence (cached across requests -- expensive to recompute) ---

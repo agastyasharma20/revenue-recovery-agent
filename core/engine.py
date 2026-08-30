@@ -26,6 +26,7 @@ from core.audit import AuditLog
 from core.circuit_breaker import CircuitBreaker
 from core.logging_config import get_logger
 from core.promise_tracking import PromiseTracker, Promise
+from core.approval import ApprovalGate
 
 
 @dataclass
@@ -38,6 +39,11 @@ class DecisionRecord:
     outcome: Optional[OutcomeResult]
     latencies_ms: dict = field(default_factory=dict)
     promise: Optional[Promise] = None
+    # Human-in-the-loop governance (core/approval.py). approval_status is one
+    # of: not_required | auto_approved | pending | approved | rejected.
+    requires_approval: bool = False
+    approval_reason: str = ""
+    approval_status: str = "not_required"
 
     @property
     def recovered_amount(self) -> float:
@@ -84,6 +90,11 @@ class DecisionRecord:
                 else None
             ),
             "promise": self.promise.to_dict() if self.promise else None,
+            "approval": {
+                "requires_approval": self.requires_approval,
+                "reason": self.approval_reason,
+                "status": self.approval_status,
+            },
         }
 
 
@@ -99,11 +110,18 @@ class RecoveryEngine:
         breaker: Optional[CircuitBreaker] = None,
         log_path: Optional[str] = "results/agent.jsonl",
         promise_tracker: Optional[PromiseTracker] = None,
+        auto_approve: Optional[bool] = None,
     ):
         assert policy_mode in ("deterministic", "bandit")
         self.breaker = breaker if breaker is not None else CircuitBreaker(failure_threshold=3, cooldown_seconds=60.0)
         self.classifier = Classifier(use_llm=use_llm, breaker=self.breaker)
         self.compliance = ComplianceChecker()
+        self.approval_gate = ApprovalGate(self.compliance.rules)
+        # None -> defer to rules.yaml's human_approval.auto_approve_in_simulation
+        # (default True, so every existing caller's behavior/numbers are
+        # unchanged unless they explicitly opt into auto_approve=False).
+        self.auto_approve = auto_approve if auto_approve is not None else self.approval_gate.auto_approve_in_simulation
+        self.pending_approvals: dict[str, DecisionRecord] = {}
         self.det_policy = DeterministicPolicy()
         self.bandit = bandit if bandit is not None else ThompsonSamplingBandit(
             rng=random.Random(seed) if seed is not None else random.Random()
@@ -141,6 +159,18 @@ class RecoveryEngine:
         if self.logger is not None:
             self.logger.info(message, extra={"trace_id": trace_id, "layer": layer})
 
+    def _execute_action(self, event: RevenueEvent, chosen_action: Action, now: datetime):
+        """The actual "do it" step -- outcome simulation, bandit feedback,
+        promise recording. Shared by the autonomous/auto-approved path and
+        by approve() on a previously-pending case, so both go through
+        identical logic (and identical RNG consumption order for the
+        autonomous path, so existing reproducible numbers don't shift)."""
+        outcome = simulate_outcome(event.decline_reason, chosen_action, event.amount, rng=self.rng)
+        if self.policy_mode == "bandit":
+            self.bandit.update(event.decline_reason.value, chosen_action, int(outcome.recovered))
+        promise = self.promise_tracker.maybe_record_promise(event, chosen_action, outcome.recovered, now)
+        return outcome, promise
+
     def process_event(self, event: RevenueEvent, now: Optional[datetime] = None) -> DecisionRecord:
         now = now or datetime.now(timezone.utc)
         trace_id = event.trace_id
@@ -165,26 +195,26 @@ class RecoveryEngine:
         self._log(trace_id, "prioritize", f"ev={priority.ev:.2f} pursue={priority.pursue}")
 
         t0 = time.perf_counter()
+        outcome, promise = None, None
+        requires_approval, approval_reason, approval_status = False, "", "not_required"
         if not priority.pursue:
             chosen_action = Action.NO_ACTION_DO_NOT_PURSUE
             compliance_result = ComplianceResult(True, "Not pursued (negative EV) -- compliance N/A.", self.compliance.version)
-            outcome = None
         else:
             chosen_action, compliance_result = self._select_action(event, diagnosis, now)
-            if chosen_action == Action.NO_ACTION_DO_NOT_PURSUE:
-                outcome = None
-            else:
-                outcome = simulate_outcome(event.decline_reason, chosen_action, event.amount, rng=self.rng)
-                if self.policy_mode == "bandit":
-                    self.bandit.update(event.decline_reason.value, chosen_action, int(outcome.recovered))
-        promise = None
-        if outcome is not None:
-            promise = self.promise_tracker.maybe_record_promise(event, chosen_action, outcome.recovered, now)
+            if chosen_action != Action.NO_ACTION_DO_NOT_PURSUE:
+                decision = self.approval_gate.check(event, diagnosis, chosen_action)
+                requires_approval, approval_reason = decision.required, decision.reason
+                if requires_approval and not self.auto_approve:
+                    approval_status = "pending"  # execution deferred -- see approve()/reject()
+                else:
+                    approval_status = "auto_approved" if requires_approval else "not_required"
+                    outcome, promise = self._execute_action(event, chosen_action, now)
         latencies["policy_and_compliance"] = (time.perf_counter() - t0) * 1000
         self._log(
             trace_id, "policy",
             f"action={chosen_action.value} compliance_allowed={compliance_result.allowed} "
-            f"outcome_recovered={outcome.recovered if outcome else None}",
+            f"approval_status={approval_status} outcome_recovered={outcome.recovered if outcome else None}",
         )
 
         record = DecisionRecord(
@@ -196,6 +226,9 @@ class RecoveryEngine:
             outcome=outcome,
             latencies_ms=latencies,
             promise=promise,
+            requires_approval=requires_approval,
+            approval_reason=approval_reason,
+            approval_status=approval_status,
         )
 
         t0 = time.perf_counter()
@@ -204,6 +237,35 @@ class RecoveryEngine:
         latencies["audit"] = (time.perf_counter() - t0) * 1000
         self._log(trace_id, "audit", "decision appended to hash-chained audit log")
 
+        if approval_status == "pending":
+            self.pending_approvals[event.event_id] = record
+
+        return record
+
+    def approve(self, event_id: str, now: Optional[datetime] = None) -> DecisionRecord:
+        """A human authorizes a pending action -- executes it now, using
+        the exact same logic path as the autonomous case."""
+        now = now or datetime.now(timezone.utc)
+        record = self.pending_approvals.pop(event_id, None)
+        if record is None:
+            raise KeyError(f"No pending approval for event_id={event_id}")
+
+        record.outcome, record.promise = self._execute_action(record.event, record.chosen_action, now)
+        record.approval_status = "approved"
+        if self.audit is not None:
+            self.audit.append(record.to_audit_payload())  # second, later audit entry -- a real resolution trail
+        return record
+
+    def reject(self, event_id: str, reason: str = "rejected by reviewer", now: Optional[datetime] = None) -> DecisionRecord:
+        """A human declines a pending action -- it never executes."""
+        record = self.pending_approvals.pop(event_id, None)
+        if record is None:
+            raise KeyError(f"No pending approval for event_id={event_id}")
+
+        record.approval_status = "rejected"
+        record.approval_reason = f"{record.approval_reason} | REJECTED: {reason}"
+        if self.audit is not None:
+            self.audit.append(record.to_audit_payload())
         return record
 
     def process_batch(self, events: list[RevenueEvent], now: Optional[datetime] = None) -> list[DecisionRecord]:

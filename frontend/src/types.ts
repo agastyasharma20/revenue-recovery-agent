@@ -33,9 +33,12 @@ export interface CaseSummary {
   customer_id: string
   chosen_action: string
   pursued: boolean
-  recovered: boolean
+  recovered: boolean | null
   recovered_amount: number
   ev: number
+  requires_approval?: boolean
+  approval_status?: string
+  approval_reason?: string
   diagnosis_category: string
 }
 

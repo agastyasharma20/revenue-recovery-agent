@@ -65,6 +65,14 @@ export function Sidebar({ params, setParams, capacityHours, setCapacityHours, on
         Use Groq LLM for diagnosis refinement
       </label>
 
+      <label className="checkbox-row">
+        <input
+          type="checkbox" checked={!params.auto_approve}
+          onChange={(e) => update({ auto_approve: !e.target.checked })}
+        />
+        Human-in-the-loop mode (hold high-risk actions for approval)
+      </label>
+
       <div className="field">
         <label>Human-review capacity: {capacityHours}h/day</label>
         <input

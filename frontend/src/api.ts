@@ -32,6 +32,7 @@ export interface CreateRunParams {
   policy_mode: 'deterministic' | 'bandit'
   inject_spike: boolean
   use_llm: boolean
+  auto_approve: boolean
 }
 
 export const api = {
@@ -46,6 +47,11 @@ export const api = {
   getPromises: (runId: string) => getJSON<PromisesResult>(`/runs/${runId}/promises`),
   getVoiceScript: (runId: string, eventId: string) =>
     postJSON<VoiceScript>(`/runs/${runId}/cases/${eventId}/voice-script`),
+  getPendingApprovals: (runId: string) => getJSON<CaseSummary[]>(`/runs/${runId}/pending-approvals`),
+  approveCase: (runId: string, eventId: string) =>
+    postJSON<CaseSummary>(`/runs/${runId}/cases/${eventId}/approve`),
+  rejectCase: (runId: string, eventId: string, reason: string) =>
+    postJSON<CaseSummary>(`/runs/${runId}/cases/${eventId}/reject?reason=${encodeURIComponent(reason)}`),
   getBanditConvergence: (seed: number, rounds: number, window: number) =>
     getJSON<BanditConvergenceResult>(`/bandit-convergence?seed=${seed}&rounds=${rounds}&window=${window}`),
   liveSocketUrl: (runId: string, speedMs: number) => {

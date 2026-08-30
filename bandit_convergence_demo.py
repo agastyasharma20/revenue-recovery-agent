@@ -54,8 +54,15 @@ def representative_context(reason: DeclineReason, now: datetime, amount: float =
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rounds", type=int, default=20000)
-    parser.add_argument("--window", type=int, default=500)
+    # 30,000 (not 20,000): adding SEND_REMINDER_WHATSAPP gave invoice_overdue
+    # a third competitive arm (collections=0.50 vs human_call=0.38 vs
+    # whatsapp=0.32 in the oracle matrix) instead of two -- distinguishing
+    # three closer options confidently needs more samples than two more
+    # separated ones, and invoice_overdue is only ~10% of traffic to begin
+    # with. Verified: 20,000 rounds left this one segment still unresolved;
+    # 30,000 reliably reaches 12/12.
+    parser.add_argument("--rounds", type=int, default=30000)
+    parser.add_argument("--window", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--alpha", type=float, default=0.6, help="LinUCB exploration strength")
     parser.add_argument("--plot", default="results/bandit_convergence.png")

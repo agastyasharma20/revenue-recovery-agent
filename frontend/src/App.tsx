@@ -8,6 +8,7 @@ import { CaseDrilldown } from './components/CaseDrilldown'
 import { BanditChart } from './components/BanditChart'
 import { PortfolioComparison } from './components/PortfolioComparison'
 import { PromiseTracker } from './components/PromiseTracker'
+import { ApprovalQueue } from './components/ApprovalQueue'
 
 const DEFAULT_PARAMS: CreateRunParams = {
   n: 500,
@@ -15,6 +16,7 @@ const DEFAULT_PARAMS: CreateRunParams = {
   policy_mode: 'deterministic',
   inject_spike: true,
   use_llm: false,
+  auto_approve: true,
 }
 
 export default function App() {
@@ -82,6 +84,10 @@ export default function App() {
 
             <section className="section">
               <LiveCounter runId={runId} summary={summary} />
+            </section>
+
+            <section className="section">
+              <ApprovalQueue runId={runId} />
             </section>
 
             <section className="section">

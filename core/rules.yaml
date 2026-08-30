@@ -36,3 +36,17 @@ npci_mandate_retry:
 # merely a week and a half old.
 b2b_receivables:
   pursuit_window_days: 90
+
+# Human-in-the-loop governance: some actions are consequential enough (large
+# rupee amounts, or a case the classifier itself flagged as a risk block)
+# that a real deployment should not let the agent execute them unattended.
+# "AI proposes, a human authorizes" for exactly these -- everything else
+# stays autonomous. In this simulation, auto_approve_in_simulation controls
+# whether pending-approval cases resolve immediately (so batch evaluation
+# runs end-to-end without a human in the loop) or genuinely pause -- see
+# core/approval.py and RecoveryEngine(auto_approve=...).
+human_approval:
+  escalate_to_collections_above_inr: 100000
+  offer_discount_above_inr: 20000
+  require_approval_for_risk_block: true
+  auto_approve_in_simulation: true
