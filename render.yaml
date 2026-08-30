@@ -1,0 +1,29 @@
+# Render Blueprint -- one free web service serves both the FastAPI backend
+# and the built React dashboard (see backend/main.py's StaticFiles mount).
+#
+# Deploy: https://dashboard.render.com/blueprints -> New Blueprint Instance
+# -> point it at this repo. Render reads this file and creates the service
+# below with no manual form-filling. See README's "Deploy" section for the
+# one-time steps (repo connect + env vars) this file cannot do for you.
+services:
+  - type: web
+    name: revenue-recovery-agent
+    runtime: python
+    plan: free
+    buildCommand: >
+      pip install -r requirements.txt &&
+      cd frontend && npm install && npm run build
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

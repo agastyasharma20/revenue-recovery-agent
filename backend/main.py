@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from backend.state import run_store, RunState
@@ -421,3 +423,16 @@ async def live_replay(websocket: WebSocket, run_id: str, speed_ms: int = 15):
         await websocket.send_json({"type": "done", "running_total": running_total, "running_recovered": running_recovered})
     except WebSocketDisconnect:
         pass
+
+
+# --- serve the built React frontend from this same process ------------------
+#
+# One deployment, one URL: all API/WS routes above are namespaced under
+# /api and /ws, so mounting the built dashboard at "/" here cannot shadow
+# them. This is what lets a single free web-service host (no separate
+# frontend host, no CORS) serve the whole app. `frontend/dist` only exists
+# after `npm run build`; in local dev you still run Vite separately and
+# this mount is simply absent (StaticFiles requires the directory to exist).
+_frontend_dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _frontend_dist.is_dir():
+    app.mount("/", StaticFiles(directory=str(_frontend_dist), html=True), name="frontend")

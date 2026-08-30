@@ -16,3 +16,7 @@ results/
 # OS/editor cruft
 .DS_Store
 .vscode/
+
+# frontend build artifacts -- Render rebuilds these from source at deploy time
+frontend/node_modules/
+frontend/dist/
