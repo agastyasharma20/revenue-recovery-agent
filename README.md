@@ -209,12 +209,35 @@ batch never spams Razorpay's API.
 → [pending approval →] executed → audited) is an explicit, timestamped
 sequence, not just a final answer — rendered as a stepper in the dashboard.
 
-**Tests**: 70/70 passing (`python -m pytest tests/ -v`), including audit-chain
+**Multi-provider LLM fallback**: `core/llm_client.py` tries Groq, then Gemini
+(both free-tier), so one vendor's outage or rate limit doesn't take the
+whole diagnosis-refinement/voice-script layer down with it. Groq's live path
+is fully verified; Gemini is wired and unit-tested, awaiting a free key
+(https://aistudio.google.com/apikey) to verify its live path the same way.
+
+**Unit economics, measured not estimated** (`python unit_economics_demo.py`):
+real token counts from a live 30-event batch — $0.001095 total LLM cost,
+INR 0.003 per event, a 284,002x ROI multiple on that batch — with an
+explicit note that the LLM refines confidence/rationale and doesn't change
+which action gets picked, so crediting it with the full recovered amount
+would be a real attribution error, not just generous rounding.
+
+**Supervised recovery-probability model** (`python train_recovery_model_demo.py`):
+a gradient-boosted classifier, complementary to the online bandit — AUC
+0.727, PR-AUC 0.285 vs. a 0.141 random baseline (2x better than chance).
+Caught a real issue building this: the default classification threshold
+gave recall ≈ 0.04 on this imbalanced data, which looked like a broken
+model until inspection showed AUC was fine — fixed by tuning the
+threshold on a validation split (never the test set) and reporting the
+full precision/recall tradeoff instead of one number.
+
+**Tests**: 87/87 passing (`python -m pytest tests/ -v`), including audit-chain
 tamper detection, all compliance rules (NPCI + B2B AR-aging), a seeded
 systemic-incident spike, idempotent webhook ingestion, Razorpay signature
 verification, promise-tracking feedback, the approval gate, real payment-link
-creation's fallback paths, the case-timeline state machine, and the FastAPI
-backend (including a live WebSocket replay test).
+creation's fallback paths, the case-timeline state machine, the multi-provider
+LLM fallback logic, unit-economics math, the ML model's evaluation honesty,
+and the FastAPI backend (including a live WebSocket replay test).
 
 ---
 
@@ -236,7 +259,13 @@ python portfolio_demo.py --seed 55 --capacity-hours 20
 # promise-to-pay reliability feedback loop
 python promise_tracking_demo.py --n 1500 --seed 7
 
-# full test suite (70 tests across every module above, plus the API)
+# unit economics: real measured token costs and ROI multiple
+python unit_economics_demo.py --n 30 --seed 1
+
+# supervised recovery-probability model: honest AUC/PR-AUC/threshold sweep
+python train_recovery_model_demo.py --n 8000 --seed 1
+
+# full test suite (87 tests across every module above, plus the API)
 python -m pytest tests/ -v
 
 # dashboards -- React (primary) needs both processes running:
@@ -392,6 +421,39 @@ SHA-256 hash chain: each record embeds the previous record's hash.
 `tests/test_audit_chain.py` proves altering, deleting, or reordering any
 single record is detected and pinpointed to the exact index.
 
+**"Where did you get stuck?"** — Integrating the Groq LLM call, and it took
+three separate misdiagnoses to actually fix. First symptom: every call
+failed with a generic network error even with a real key. Root cause:
+Groq's Cloudflare front-end blocks `urllib`'s default User-Agent before the
+request ever reaches Groq's API (`core/llm_client.py`, the `User-Agent`
+header on both provider calls). Fixed that, got a *different* failure: the
+originally-hardcoded model had been retired from Groq's lineup entirely —
+found by calling `GET /openai/v1/models` directly instead of guessing.
+Fixed that, got a *third* failure: the replacement is a reasoning model
+that can spend its entire token budget on hidden reasoning and return
+empty content, which looked like a parsing bug until I checked
+`finish_reason` and `usage.reasoning_tokens` in the raw response. Each
+fix revealed the next problem instead of resolving the whole thing, which
+is what actually made it "stuck" rather than just a one-line bug — the
+same root-cause discipline is what later caught the ML model's misleading
+recall number (see "Real bugs caught" above) and a real async race in the
+React frontend. All three Groq fixes now live in one shared module
+(`core/llm_client.py`) specifically so they can't be silently re-broken by
+a second call site, which is exactly what happened when `voice_recovery.py`
+was added afterward and needed the same fixes.
+
+**"You mentioned Razorpay has an official MCP server
+(`razorpay/razorpay-mcp-server`) — did you use it?"** — No, and saying so
+plainly: `core/payment_links.py` and `core/razorpay_integration.py` call
+Razorpay's REST API directly via their Python SDK. Wiring the agent's
+action-selection layer to call Razorpay's MCP server as an LLM tool
+instead would be a more "agentic" design (the model deciding to invoke a
+payment-link tool rather than deterministic code calling a function) and
+is a natural next step, deliberately not attempted this close to a
+deadline given this project's explicit stance that AI proposes and
+deterministic code executes — swapping the payment-execution path to an
+LLM-driven tool call needs its own careful bounding, not a rushed one.
+
 ---
 
 ## Repository layout
@@ -426,7 +488,7 @@ backend/
 frontend/                  React + Vite + TypeScript dashboard (primary UI)
 dashboard/
   app.py                   Streamlit dashboard (lighter alternative)
-tests/                     70 tests across every module above plus the API
+tests/                     87 tests across every module above plus the API
 run_evaluation.py           baseline vs agent, multi-seed
 bandit_convergence_demo.py  bandit convergence proof
 portfolio_demo.py           knapsack vs greedy proof
