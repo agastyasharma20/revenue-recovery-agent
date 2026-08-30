@@ -88,6 +88,31 @@ def test_mandate_cooldown_allows_retry_after_window():
     assert result.allowed is True
 
 
+def test_b2b_receivables_use_a_longer_pursuit_window_than_subscriptions():
+    """A B2B invoice ~9 days old must NOT be blocked by the 7-day
+    subscription/mandate pursuit window -- B2B follows a ~90-day
+    receivables-aging convention instead (rules.yaml: b2b_receivables)."""
+    checker = ComplianceChecker()
+    aging_invoice = RevenueEvent(
+        source=EventSource.B2B_RECEIVABLE_OVERDUE,
+        decline_reason=DeclineReason.INVOICE_OVERDUE,
+        amount=250000.0,
+        customer_segment=CustomerSegment.HIGH_LTV,
+        created_at=NOW - timedelta(days=9),
+        last_attempt_at=NOW - timedelta(days=9),
+        retry_count=0,
+    )
+    result = checker.check(aging_invoice, Action.ESCALATE_TO_COLLECTIONS, now=NOW)
+    assert result.allowed is True
+
+    # but a subscription failure the same age SHOULD be blocked by the
+    # shorter 7-day window -- confirms the two windows are genuinely
+    # independent, not that the B2B rule silently swallowed everything.
+    stale_subscription = _event(created_at=NOW - timedelta(days=9))
+    result2 = checker.check(stale_subscription, Action.RETRY_PAYMENT, now=NOW)
+    assert result2.allowed is False
+
+
 def test_non_subscription_sources_are_exempt_from_mandate_retry_rules():
     """A checkout-abandonment reminder or a B2B collections call isn't an
     e-mandate retry -- NPCI retry-cap/gap rules shouldn't apply to it even

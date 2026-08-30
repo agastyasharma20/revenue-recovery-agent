@@ -25,6 +25,7 @@ from core.outcome_simulator import simulate_outcome, OutcomeResult
 from core.audit import AuditLog
 from core.circuit_breaker import CircuitBreaker
 from core.logging_config import get_logger
+from core.promise_tracking import PromiseTracker, Promise
 
 
 @dataclass
@@ -36,6 +37,7 @@ class DecisionRecord:
     compliance: ComplianceResult
     outcome: Optional[OutcomeResult]
     latencies_ms: dict = field(default_factory=dict)
+    promise: Optional[Promise] = None
 
     @property
     def recovered_amount(self) -> float:
@@ -81,6 +83,7 @@ class DecisionRecord:
                 if self.outcome
                 else None
             ),
+            "promise": self.promise.to_dict() if self.promise else None,
         }
 
 
@@ -95,6 +98,7 @@ class RecoveryEngine:
         seed: Optional[int] = None,
         breaker: Optional[CircuitBreaker] = None,
         log_path: Optional[str] = "results/agent.jsonl",
+        promise_tracker: Optional[PromiseTracker] = None,
     ):
         assert policy_mode in ("deterministic", "bandit")
         self.breaker = breaker if breaker is not None else CircuitBreaker(failure_threshold=3, cooldown_seconds=60.0)
@@ -108,6 +112,9 @@ class RecoveryEngine:
         self.audit = AuditLog(audit_path) if audit_path else None
         self.rng = rng if rng is not None else (random.Random(seed) if seed is not None else random.Random())
         self.logger = get_logger(log_path=log_path) if log_path else None
+        self.promise_tracker = promise_tracker if promise_tracker is not None else PromiseTracker(
+            rng=random.Random(seed + 777) if seed is not None else random.Random()
+        )
 
     def _select_action(self, event: RevenueEvent, diagnosis: Diagnosis, now: datetime):
         """Returns (chosen_action, compliance_result)."""
@@ -145,7 +152,15 @@ class RecoveryEngine:
         self._log(trace_id, "diagnose", f"category={diagnosis.category.value} confidence={diagnosis.confidence:.2f} llm_used={diagnosis.llm_used}")
 
         t0 = time.perf_counter()
-        priority = prioritize(event, diagnosis)
+        # A customer's own broken/kept promise history (from EARLIER events
+        # in this engine's lifetime) feeds forward into this decision. Only
+        # passed when there's actual history -- a first-time customer gets
+        # no adjustment rather than a misleading "neutral reliability" note.
+        prior_history = self.promise_tracker.customer_history(event.customer_id)
+        customer_reliability = (
+            self.promise_tracker.customer_reliability_score(event.customer_id) if prior_history else None
+        )
+        priority = prioritize(event, diagnosis, customer_reliability=customer_reliability)
         latencies["prioritize"] = (time.perf_counter() - t0) * 1000
         self._log(trace_id, "prioritize", f"ev={priority.ev:.2f} pursue={priority.pursue}")
 
@@ -162,6 +177,9 @@ class RecoveryEngine:
                 outcome = simulate_outcome(event.decline_reason, chosen_action, event.amount, rng=self.rng)
                 if self.policy_mode == "bandit":
                     self.bandit.update(event.decline_reason.value, chosen_action, int(outcome.recovered))
+        promise = None
+        if outcome is not None:
+            promise = self.promise_tracker.maybe_record_promise(event, chosen_action, outcome.recovered, now)
         latencies["policy_and_compliance"] = (time.perf_counter() - t0) * 1000
         self._log(
             trace_id, "policy",
@@ -177,6 +195,7 @@ class RecoveryEngine:
             compliance=compliance_result,
             outcome=outcome,
             latencies_ms=latencies,
+            promise=promise,
         )
 
         t0 = time.perf_counter()

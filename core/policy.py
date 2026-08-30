@@ -38,17 +38,20 @@ _CANDIDATE_ACTIONS: dict[tuple[EventSource, DiagnosisCategory], list[Action]] = 
     (EventSource.SUBSCRIPTION_FAILED, DiagnosisCategory.TRANSIENT_RETRIABLE): [
         Action.RETRY_PAYMENT,
         Action.RETRY_WITH_ALTERNATE_METHOD,
+        Action.SEND_REMINDER_WHATSAPP,
         Action.SEND_REMINDER_SMS,
     ],
     (EventSource.SUBSCRIPTION_FAILED, DiagnosisCategory.SOFT_DECLINE_RETRIABLE): [
         Action.RETRY_PAYMENT,
         Action.RETRY_WITH_ALTERNATE_METHOD,
+        Action.SEND_REMINDER_WHATSAPP,
         Action.SEND_REMINDER_SMS,
         Action.ESCALATE_TO_HUMAN_CALL,
     ],
     (EventSource.SUBSCRIPTION_FAILED, DiagnosisCategory.HARD_DECLINE_UNRETRIABLE): [
         Action.UPDATE_PAYMENT_METHOD_LINK,
         Action.RETRY_WITH_ALTERNATE_METHOD,
+        Action.SEND_REMINDER_WHATSAPP,
         Action.ESCALATE_TO_HUMAN_CALL,
     ],
     (EventSource.SUBSCRIPTION_FAILED, DiagnosisCategory.RISK_BLOCK): [
@@ -57,18 +60,20 @@ _CANDIDATE_ACTIONS: dict[tuple[EventSource, DiagnosisCategory], list[Action]] = 
     ],
     (EventSource.CHECKOUT_ABANDONED, DiagnosisCategory.CUSTOMER_INACTION): [
         Action.OFFER_DISCOUNT,
+        Action.SEND_REMINDER_WHATSAPP,
         Action.SEND_REMINDER_EMAIL,
         Action.SEND_REMINDER_SMS,
     ],
     (EventSource.B2B_RECEIVABLE_OVERDUE, DiagnosisCategory.CUSTOMER_INACTION): [
         Action.ESCALATE_TO_COLLECTIONS,
         Action.ESCALATE_TO_HUMAN_CALL,
+        Action.SEND_REMINDER_WHATSAPP,
         Action.SEND_REMINDER_EMAIL,
         Action.OFFER_DISCOUNT,
     ],
 }
 
-_FALLBACK_CANDIDATES = [Action.SEND_REMINDER_EMAIL, Action.SEND_REMINDER_SMS]
+_FALLBACK_CANDIDATES = [Action.SEND_REMINDER_WHATSAPP, Action.SEND_REMINDER_EMAIL, Action.SEND_REMINDER_SMS]
 
 
 class DeterministicPolicy:

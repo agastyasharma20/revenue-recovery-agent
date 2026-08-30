@@ -83,8 +83,12 @@ def test_isolation_forest_flags_unusual_event_against_normal_baseline():
 
     result = detector.score(weird)
     # We don't assert is_anomaly strictly (IsolationForest thresholds can be
-    # sensitive), but the anomalous event's score must be clearly higher
-    # than a run-of-the-mill normal event's score.
-    typical = normal_events[0]
-    typical_result = detector.score(typical)
-    assert result.anomaly_score > typical_result.anomaly_score
+    # sensitive), but the anomalous event's score must be clearly higher than
+    # a typical normal event's. Compare against the MEAN score across a
+    # sample of normal events, not one arbitrary instance -- a single-point
+    # comparison is not statistically robust (any one "typical" event can
+    # itself land on the noisier tail of the score distribution) and did
+    # fail intermittently for exactly that reason during development.
+    sample_scores = [detector.score(e).anomaly_score for e in normal_events[:30]]
+    mean_typical_score = sum(sample_scores) / len(sample_scores)
+    assert result.anomaly_score > mean_typical_score

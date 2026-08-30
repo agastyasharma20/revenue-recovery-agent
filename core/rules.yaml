@@ -9,7 +9,7 @@
 #
 # version: bump this whenever a threshold changes; the audit log records
 # which rules_version was active for every decision.
-version: 1
+version: 2
 
 npci_mandate_retry:
   # Hard cap on automated retry attempts per event (NPCI e-mandate convention).
@@ -19,9 +19,20 @@ npci_mandate_retry:
   min_hours_between_retries: 24
 
   # After this many days from event creation, stop pursuing recovery
-  # entirely (regulatory + cost-of-pursuit cutoff).
+  # entirely (regulatory + cost-of-pursuit cutoff). Applies to
+  # subscription_failed and checkout_abandoned -- short-lived leakage where
+  # chasing stale cases isn't worth it.
   pursuit_window_days: 7
 
   # Never retry within this many hours of the mandate's creation --
   # newly-created mandates need time to settle with the issuing bank.
   no_retry_within_hours_of_mandate_creation: 24
+
+# B2B receivables follow normal accounts-receivable aging conventions, not
+# NPCI mandate rules -- a 90-day DSO-style collection window is standard,
+# nowhere close to a subscription retry's 7-day cutoff. Bumped to version 2
+# after this was caught during testing: the shared 7-day window was
+# incorrectly closing out large, clearly-worth-pursuing invoices that were
+# merely a week and a half old.
+b2b_receivables:
+  pursuit_window_days: 90

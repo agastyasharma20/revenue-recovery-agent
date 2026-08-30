@@ -17,6 +17,7 @@ realistic -- a real system's estimates are never perfectly calibrated either.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 from core.classifier import Diagnosis
 from core.schema import RevenueEvent, DiagnosisCategory, OFFER_DISCOUNT_PCT_OF_AMOUNT
@@ -52,12 +53,25 @@ class PriorityResult:
     reason: str
 
 
-def score(event: RevenueEvent, diagnosis: Diagnosis) -> PriorityResult:
+def score(event: RevenueEvent, diagnosis: Diagnosis, customer_reliability: Optional[float] = None) -> PriorityResult:
+    """customer_reliability, when known (see core.promise_tracking), is the
+    customer's kept/broken promise-to-pay track record in [0, 1], 0.5 =
+    neutral/no history. It rescales the effective probability by up to +-50%
+    -- a business that has broken its last three promises should look like
+    a worse bet than the category prior alone suggests, and one with a
+    clean record a slightly better one. This is the one place a customer's
+    history from earlier events feeds forward into a later decision."""
     prior_prob = _PRIOR_RECOVERY_PROB.get(diagnosis.category, 0.05)
 
     # Blend the category prior with classifier confidence: a low-confidence
     # diagnosis shouldn't get the full prior probability at face value.
     effective_prob = prior_prob * (0.5 + 0.5 * diagnosis.confidence)
+
+    reliability_note = ""
+    if customer_reliability is not None:
+        multiplier = 0.5 + customer_reliability  # reliability=0.5 -> x1.0 (neutral); 0.0->x0.5; 1.0->x1.5
+        effective_prob *= multiplier
+        reliability_note = f" [customer reliability={customer_reliability:.2f} -> prob x{multiplier:.2f}]"
 
     if diagnosis.category == DiagnosisCategory.CUSTOMER_INACTION:
         cost = event.amount * OFFER_DISCOUNT_PCT_OF_AMOUNT
@@ -70,12 +84,12 @@ def score(event: RevenueEvent, diagnosis: Diagnosis) -> PriorityResult:
     if pursue:
         reason = (
             f"EV=+{ev:,.2f} INR (P~{effective_prob:.2f} x amount {event.amount:,.2f} "
-            f"- cost {cost:,.2f}) -> worth pursuing."
+            f"- cost {cost:,.2f}) -> worth pursuing.{reliability_note}"
         )
     else:
         reason = (
             f"EV={ev:,.2f} INR (P~{effective_prob:.2f} x amount {event.amount:,.2f} "
-            f"- cost {cost:,.2f}) is not positive -> do not pursue."
+            f"- cost {cost:,.2f}) is not positive -> do not pursue.{reliability_note}"
         )
 
     return PriorityResult(

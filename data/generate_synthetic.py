@@ -91,11 +91,33 @@ def _oracle_ground_truth(decline_reason: DeclineReason, amount: float) -> Ground
     return GroundTruth(recoverable=oracle_ev > 0, best_action=best_action, best_action_prob=best_prob)
 
 
+def _make_b2b_customer_pool(rng: random.Random, seed: int, n_events: int) -> list[dict]:
+    """A fixed pool of recurring B2B customers (businesses reasonably have
+    multiple overdue invoices over an observation window, unlike a
+    one-off consumer checkout). Each has a stable segment and a hidden
+    "reliability" trait -- some businesses are just more likely to keep a
+    payment promise than others -- used by core/promise_tracking.py.
+    Pool size scales with batch size so small batches still get plausible
+    repeat customers without overcrowding tiny batches."""
+    pool_size = max(8, n_events // 15)
+    pool = []
+    for i in range(pool_size):
+        pool.append(
+            {
+                "customer_id": f"biz_{seed}_{i:03d}",
+                "segment": _weighted_choice(rng, SEGMENT_WEIGHTS),
+                "reliability": rng.betavariate(2, 2),  # most businesses cluster around 0.5, some very high/low
+            }
+        )
+    return pool
+
+
 def generate_batch(n: int, seed: int, now: datetime | None = None):
     """Returns (events: list[RevenueEvent], ground_truth: dict[event_id, GroundTruth])."""
     rng = random.Random(seed)
     now = now or datetime.now(timezone.utc)
 
+    b2b_customers = _make_b2b_customer_pool(rng, seed, n)
     events = []
     ground_truth = {}
 
@@ -111,7 +133,13 @@ def generate_batch(n: int, seed: int, now: datetime | None = None):
 
         lo, hi = AMOUNT_RANGES[source]
         amount = round(rng.uniform(lo, hi), 2)
-        segment = _weighted_choice(rng, SEGMENT_WEIGHTS)
+
+        b2b_customer = None
+        if source == EventSource.B2B_RECEIVABLE_OVERDUE:
+            b2b_customer = rng.choice(b2b_customers)
+            segment = CustomerSegment(b2b_customer["segment"])
+        else:
+            segment = _weighted_choice(rng, SEGMENT_WEIGHTS)
 
         # created_at spread over the last 10 days, deliberately including
         # some events past the 7-day pursuit window so compliance has
@@ -137,7 +165,7 @@ def generate_batch(n: int, seed: int, now: datetime | None = None):
             last_attempt_at = created_at
             mandate_created_at = None
 
-        event = RevenueEvent(
+        event_kwargs = dict(
             source=source,
             decline_reason=decline_reason,
             amount=amount,
@@ -147,6 +175,16 @@ def generate_batch(n: int, seed: int, now: datetime | None = None):
             retry_count=retry_count,
             mandate_created_at=mandate_created_at,
         )
+        if b2b_customer is not None:
+            # reuse the same customer_id across this business's invoices, and
+            # stash their hidden reliability trait for promise_tracking.py --
+            # never read by the diagnosis/prioritization/policy layers, only
+            # by the post-hoc promise simulation (same "hidden ground truth"
+            # discipline as GroundTruth above).
+            event_kwargs["customer_id"] = b2b_customer["customer_id"]
+            event_kwargs["metadata"] = {"_b2b_reliability": b2b_customer["reliability"]}
+
+        event = RevenueEvent(**event_kwargs)
         events.append(event)
         ground_truth[event.event_id] = _oracle_ground_truth(decline_reason, amount)
 

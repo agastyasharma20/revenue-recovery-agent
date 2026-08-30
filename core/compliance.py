@@ -38,6 +38,16 @@ class ComplianceChecker:
         self.rules = rules or load_rules()
         self.version = self.rules.get("version", 0)
         self._m = self.rules["npci_mandate_retry"]
+        self._b2b = self.rules.get("b2b_receivables", {})
+
+    def _pursuit_window_days(self, event: RevenueEvent) -> int:
+        """B2B receivables follow accounts-receivable aging conventions
+        (~90 days), not the NPCI mandate retry window (~7 days) -- these are
+        different regulatory/business contexts and sharing one cutoff was a
+        real bug caught during testing (see rules.yaml)."""
+        if event.source == EventSource.B2B_RECEIVABLE_OVERDUE and "pursuit_window_days" in self._b2b:
+            return self._b2b["pursuit_window_days"]
+        return self._m["pursuit_window_days"]
 
     def check(
         self, event: RevenueEvent, candidate_action: Action, now: Optional[datetime] = None
@@ -47,12 +57,13 @@ class ComplianceChecker:
 
         # 1. Pursuit window cutoff -- stop chasing stale events entirely,
         #    regardless of action.
+        pursuit_window_days = self._pursuit_window_days(event)
         age_days = (now - event.created_at).total_seconds() / 86400
-        if age_days > self._m["pursuit_window_days"]:
+        if age_days > pursuit_window_days:
             return ComplianceResult(
                 False,
                 f"Event is {age_days:.1f} days old, past the "
-                f"{self._m['pursuit_window_days']}-day pursuit window cutoff.",
+                f"{pursuit_window_days}-day pursuit window cutoff.",
                 v,
             )
 

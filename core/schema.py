@@ -104,6 +104,7 @@ class Action(str, Enum):
     RETRY_WITH_ALTERNATE_METHOD = "retry_with_alternate_method"
     SEND_REMINDER_SMS = "send_reminder_sms"
     SEND_REMINDER_EMAIL = "send_reminder_email"
+    SEND_REMINDER_WHATSAPP = "send_reminder_whatsapp"  # mirrors Razorpay's real Failed Payment Recovery (WhatsApp+Email+SMS payment links)
     OFFER_DISCOUNT = "offer_discount"
     UPDATE_PAYMENT_METHOD_LINK = "update_payment_method_link"
     ESCALATE_TO_HUMAN_CALL = "escalate_to_human_call"
@@ -119,6 +120,7 @@ ACTION_FLAT_COST = {
     Action.RETRY_WITH_ALTERNATE_METHOD: 5.0,
     Action.SEND_REMINDER_SMS: 0.5,
     Action.SEND_REMINDER_EMAIL: 0.1,
+    Action.SEND_REMINDER_WHATSAPP: 0.3,  # cheaper than SMS at scale but has per-conversation API cost
     Action.OFFER_DISCOUNT: 0.0,  # real cost added on top in prioritizer (% of amount)
     Action.UPDATE_PAYMENT_METHOD_LINK: 1.0,
     Action.ESCALATE_TO_HUMAN_CALL: 150.0,
