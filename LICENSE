@@ -1,21 +1,44 @@
-MIT License
+All Rights Reserved
 
-Copyright (c) 2026 Agastya Sharma
+Copyright (c) 2026 Agastya Sharma. All Rights Reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This repository and everything in it — including but not limited to all
+source code, object code, configuration files, documentation, README
+content, architecture, design, prompts, data schemas, and any other
+associated files (collectively, the "Software") — is the sole and
+exclusive property of Agastya Sharma.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+NO LICENSE IS GRANTED. No permission, license, or right of any kind is
+granted to any person to use, copy, reproduce, modify, adapt, merge,
+publish, distribute, sublicense, sell, rent, lease, transmit, display,
+perform, create derivative works from, reverse-engineer, decompile, or
+otherwise exploit the Software, or any portion of it, in whole or in
+part, in any form or by any means, for any purpose whatsoever, without
+the prior express written permission of the copyright holder.
+
+This includes, without limitation, copying even a single file, function,
+snippet, or line of code, text, or configuration from this repository
+into any other project, publication, or product, whether for commercial
+or non-commercial purposes.
+
+This repository may be publicly visible on GitHub for demonstration,
+review, and evaluation purposes only — including, without limitation,
+evaluation as part of a hackathon, buildathon, or recruiting process.
+Public visibility does not constitute, and must not be construed as, a
+license or grant of any right to use, copy, or reproduce the Software.
+Viewing, cloning, or forking this repository for personal inspection does
+not authorize any further use.
+
+Unauthorized use, reproduction, or distribution of this Software, or any
+part of it, is a violation of copyright law and may result in civil and
+criminal penalties, and will be pursued to the maximum extent permitted
+by applicable law.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+For permission requests, contact: work.agastya20@gmail.com

@@ -12,7 +12,7 @@ Built for the **Razorpay AI Buildathon — Track 03: AI Revenue Recovery**
 [![Razorpay](https://img.shields.io/badge/Razorpay-Test%20Mode%20Live-0C2340?style=for-the-badge&logo=razorpay&logoColor=3395FF)](core/payment_links.py)
 [![Groq](https://img.shields.io/badge/Groq-LLM-F55036?style=for-the-badge)](core/llm_client.py)
 [![Gemini](https://img.shields.io/badge/Gemini-fallback-4285F4?style=for-the-badge&logo=google&logoColor=white)](core/llm_client.py)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow?style=for-the-badge)](LICENSE)
+[![License: All Rights Reserved](https://img.shields.io/badge/license-All%20Rights%20Reserved-red?style=for-the-badge)](LICENSE)
 
 ### 🔴 [Live demo — revenue-recovery-agent-5b31.onrender.com](https://revenue-recovery-agent-5b31.onrender.com)
 *Free-tier host: sleeps after 15 min idle. If it's your first click in a while, give it ~30–50s to wake up.*
