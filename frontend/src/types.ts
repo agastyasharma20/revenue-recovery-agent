@@ -59,6 +59,10 @@ export interface CaseDetail {
     chosen_action: string
     outcome: { recovered: boolean; probability_used: number; amount_recovered: number } | null
     promise: { promise_id: string; status: string; promised_date: string; amount: number } | null
+    agentic_decision: {
+      action: string; rationale: string; source: 'llm' | 'deterministic_fallback'
+      llm_provider: string | null; llm_prompt_tokens: number; llm_completion_tokens: number; llm_error: string | null
+    } | null
     timeline: { stage: string; at: string; note: string }[]
   }
   audit_chain: { prev_hash: string; this_hash: string; logged_at: string } | null

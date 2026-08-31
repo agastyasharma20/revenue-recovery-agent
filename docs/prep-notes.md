@@ -76,16 +76,22 @@ a second call site, which is exactly what happened when `voice_recovery.py`
 was added afterward and needed the same fixes.
 
 **"You mentioned Razorpay has an official MCP server
-(`razorpay/razorpay-mcp-server`) — did you use it?"** — No, and saying so
-plainly: `core/payment_links.py` and `core/razorpay_integration.py` call
-Razorpay's REST API directly via their Python SDK. Wiring the agent's
-action-selection layer to call Razorpay's MCP server as an LLM tool
-instead would be a more "agentic" design (the model deciding to invoke a
-payment-link tool rather than deterministic code calling a function) and
-is a natural next step, deliberately not attempted this close to a
-deadline given this project's explicit stance that AI proposes and
-deterministic code executes — swapping the payment-execution path to an
-LLM-driven tool call needs its own careful bounding, not a rushed one.
+(`razorpay/razorpay-mcp-server`) — did you use it?"** — Not that specific
+server: `core/payment_links.py` and `core/razorpay_integration.py` still
+call Razorpay's REST API directly via their Python SDK, not through MCP.
+But the underlying question — "does the model ever get to decide, or does
+deterministic code always decide for it?" — now has a real answer:
+`core/agentic_policy.py` (`policy_mode="agentic"`) lets an LLM genuinely
+choose the recovery action via a tool-call-style JSON response, not just
+generate text. The bound that keeps this safe: the model is only ever
+shown actions `core/compliance.py` has *already* approved for that exact
+case, and an out-of-list response (hallucinated or real-but-not-offered)
+is rejected and falls back to the deterministic policy's top pick, never
+executed — `tests/test_agentic_policy.py::test_out_of_bounds_llm_response_is_rejected_not_executed`
+proves this directly by simulating exactly that attempt. Routing this
+through Razorpay's actual MCP server specifically (so the tool call is a
+real MCP tool invocation, not our own JSON contract) is the next natural
+step, genuinely not attempted — but "the model decides, bounded" is done.
 
 **"Is the live demo actually deployed, or just localhost?"** — It's a real
 deployment: https://revenue-recovery-agent-5b31.onrender.com, one FastAPI
@@ -113,9 +119,12 @@ A suggested shot list, timed for a 5-minute cap:
    and let the counter animate, drill into one case and show the full
    diagnosis → EV → compliance → action → hash-chain trail, generate a
    Hinglish voice script live.
-4. **(2:30–3:15) The two things that make this more than a reminder bot.**
+4. **(2:30–3:15) The three things that make this more than a reminder bot.**
    Show the bandit convergence chart (12/12 learned-vs-oracle match, no
-   hardcoded mapping) and the knapsack-vs-greedy comparison. Say the
+   hardcoded mapping), the knapsack-vs-greedy comparison, and switch to
+   agentic mode live — one case, watch the LLM's real rationale come back,
+   then say the bound out loud: it only ever saw compliance-approved
+   options, and an out-of-bounds pick gets rejected, not executed. Say the
    numbers plainly, including where the knapsack gap is small — that
    honesty is a feature, not a weakness.
 5. **(3:15–4:00) Governance.** Toggle HITL mode, show the approval queue

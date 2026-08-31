@@ -9,8 +9,18 @@ interface Props {
   loading: boolean
 }
 
+const AGENTIC_MAX_N = 80
+
 export function Sidebar({ params, setParams, capacityHours, setCapacityHours, onGenerate, loading }: Props) {
   const update = (patch: Partial<CreateRunParams>) => setParams({ ...params, ...patch })
+
+  const setPolicyMode = (mode: CreateRunParams['policy_mode']) => {
+    // Agentic mode makes one real LLM call per pursued event -- the backend
+    // rejects n > 80 for it (see backend/main.py), so clamp here too rather
+    // than let the user hit a 400 after clicking Generate.
+    const n = mode === 'agentic' ? Math.min(params.n, AGENTIC_MAX_N) : params.n
+    setParams({ ...params, policy_mode: mode, n })
+  }
 
   return (
     <aside className="sidebar">
@@ -25,7 +35,8 @@ export function Sidebar({ params, setParams, capacityHours, setCapacityHours, on
       <div className="field">
         <label>Events in batch: {params.n}</label>
         <input
-          type="range" min={100} max={2000} step={100} value={params.n}
+          type="range" min={100} max={params.policy_mode === 'agentic' ? AGENTIC_MAX_N : 2000}
+          step={params.policy_mode === 'agentic' ? 10 : 100} value={params.n}
           onChange={(e) => update({ n: Number(e.target.value) })}
         />
       </div>
@@ -42,11 +53,19 @@ export function Sidebar({ params, setParams, capacityHours, setCapacityHours, on
         <label>Action policy</label>
         <select
           className="select-box" value={params.policy_mode}
-          onChange={(e) => update({ policy_mode: e.target.value as CreateRunParams['policy_mode'] })}
+          onChange={(e) => setPolicyMode(e.target.value as CreateRunParams['policy_mode'])}
         >
           <option value="deterministic">Deterministic (diagnosis-informed)</option>
           <option value="bandit">Thompson Sampling bandit</option>
+          <option value="agentic">Agentic (LLM picks, bounded by compliance)</option>
         </select>
+        {params.policy_mode === 'agentic' && (
+          <div className="field-hint">
+            The LLM chooses the action itself from a compliance-filtered candidate
+            list per case (real Groq/Gemini calls, capped at {AGENTIC_MAX_N} events/batch).
+            No key configured → falls back to the deterministic policy's top pick, cleanly.
+          </div>
+        )}
       </div>
 
       <label className="checkbox-row">

@@ -21,6 +21,7 @@ from core.classifier import Classifier, Diagnosis
 from core.prioritizer import score as prioritize, PriorityResult
 from core.compliance import ComplianceChecker, ComplianceResult
 from core.policy import DeterministicPolicy, ThompsonSamplingBandit, BANDIT_ARMS
+from core.agentic_policy import select_action as agentic_select_action, AgenticDecision
 from core.outcome_simulator import simulate_outcome, OutcomeResult
 from core.audit import AuditLog
 from core.circuit_breaker import CircuitBreaker
@@ -44,6 +45,10 @@ class DecisionRecord:
     requires_approval: bool = False
     approval_reason: str = ""
     approval_status: str = "not_required"
+    # Populated only when policy_mode="agentic" -- which action the LLM
+    # actually picked (or that it was rejected and fell back), for full
+    # transparency in the audit trail. None for every other policy mode.
+    agentic_decision: Optional[AgenticDecision] = None
     # Explicit lifecycle: named states + timestamps + a short human-readable
     # note, in the order they actually happened. This is what makes "bounded
     # recovery workflow" a checkable claim rather than a description -- the
@@ -102,6 +107,7 @@ class DecisionRecord:
                 "reason": self.approval_reason,
                 "status": self.approval_status,
             },
+            "agentic_decision": self.agentic_decision.to_dict() if self.agentic_decision else None,
             "timeline": self.timeline,
         }
 
@@ -110,7 +116,7 @@ class RecoveryEngine:
     def __init__(
         self,
         use_llm: bool = False,
-        policy_mode: str = "deterministic",  # "deterministic" | "bandit"
+        policy_mode: str = "deterministic",  # "deterministic" | "bandit" | "agentic"
         audit_path: Optional[str] = "results/audit_log.jsonl",
         bandit: Optional[ThompsonSamplingBandit] = None,
         rng: Optional[random.Random] = None,
@@ -120,7 +126,7 @@ class RecoveryEngine:
         promise_tracker: Optional[PromiseTracker] = None,
         auto_approve: Optional[bool] = None,
     ):
-        assert policy_mode in ("deterministic", "bandit")
+        assert policy_mode in ("deterministic", "bandit", "agentic")
         self.breaker = breaker if breaker is not None else CircuitBreaker(failure_threshold=3, cooldown_seconds=60.0)
         self.classifier = Classifier(use_llm=use_llm, breaker=self.breaker)
         self.compliance = ComplianceChecker()
@@ -143,7 +149,7 @@ class RecoveryEngine:
         )
 
     def _select_action(self, event: RevenueEvent, diagnosis: Diagnosis, now: datetime):
-        """Returns (chosen_action, compliance_result)."""
+        """Returns (chosen_action, compliance_result, agentic_decision_or_None)."""
         if self.policy_mode == "deterministic":
             candidates = self.det_policy.candidate_actions(event, diagnosis)
             last_cr = None
@@ -151,17 +157,32 @@ class RecoveryEngine:
                 cr = self.compliance.check(event, cand, now)
                 last_cr = cr
                 if cr.allowed:
-                    return cand, cr
-            return Action.NO_ACTION_DO_NOT_PURSUE, last_cr
+                    return cand, cr, None
+            return Action.NO_ACTION_DO_NOT_PURSUE, last_cr, None
+        elif self.policy_mode == "agentic":
+            # THE bound: filter to compliance-allowed candidates FIRST, then
+            # let the LLM pick among only those -- it never even sees an
+            # action it isn't allowed to choose. See core/agentic_policy.py's
+            # module docstring for the full safety argument.
+            candidates = [
+                cand for cand in self.det_policy.candidate_actions(event, diagnosis)
+                if self.compliance.check(event, cand, now).allowed
+            ]
+            if not candidates:
+                cr = self.compliance.check(event, Action.RETRY_PAYMENT, now)
+                return Action.NO_ACTION_DO_NOT_PURSUE, cr, None
+            decision = agentic_select_action(event, diagnosis, candidates)
+            cr = self.compliance.check(event, decision.action, now)
+            return decision.action, cr, decision
         else:
             allowed_arms = [a for a in BANDIT_ARMS if self.compliance.check(event, a, now).allowed]
             if not allowed_arms:
                 cr = self.compliance.check(event, Action.RETRY_PAYMENT, now)
-                return Action.NO_ACTION_DO_NOT_PURSUE, cr
+                return Action.NO_ACTION_DO_NOT_PURSUE, cr, None
             segment = event.decline_reason.value
             chosen = self.bandit.select_action(segment, arms=allowed_arms)
             cr = self.compliance.check(event, chosen, now)
-            return chosen, cr
+            return chosen, cr, None
 
     def _log(self, trace_id: str, layer: str, message: str) -> None:
         if self.logger is not None:
@@ -221,13 +242,14 @@ class RecoveryEngine:
 
         t0 = time.perf_counter()
         outcome, promise = None, None
+        agentic_decision: Optional[AgenticDecision] = None
         requires_approval, approval_reason, approval_status = False, "", "not_required"
         if not priority.pursue:
             chosen_action = Action.NO_ACTION_DO_NOT_PURSUE
             compliance_result = ComplianceResult(True, "Not pursued (negative EV) -- compliance N/A.", self.compliance.version)
             timeline.append(self._timeline_entry("closed", "negative EV -- not pursued", datetime.now(timezone.utc)))
         else:
-            chosen_action, compliance_result = self._select_action(event, diagnosis, now)
+            chosen_action, compliance_result, agentic_decision = self._select_action(event, diagnosis, now)
             timeline.append(self._timeline_entry(
                 "compliance_checked",
                 f"{'allowed' if compliance_result.allowed else 'blocked'}: {compliance_result.reason}",
@@ -236,7 +258,10 @@ class RecoveryEngine:
             if chosen_action == Action.NO_ACTION_DO_NOT_PURSUE:
                 timeline.append(self._timeline_entry("closed", "no compliant action available", datetime.now(timezone.utc)))
             else:
-                timeline.append(self._timeline_entry("action_selected", chosen_action.value, datetime.now(timezone.utc)))
+                action_note = chosen_action.value
+                if agentic_decision is not None:
+                    action_note += f" ({agentic_decision.source}: {agentic_decision.rationale})"
+                timeline.append(self._timeline_entry("action_selected", action_note, datetime.now(timezone.utc)))
                 decision = self.approval_gate.check(event, diagnosis, chosen_action)
                 requires_approval, approval_reason = decision.required, decision.reason
                 if requires_approval and not self.auto_approve:
@@ -270,6 +295,7 @@ class RecoveryEngine:
             requires_approval=requires_approval,
             approval_reason=approval_reason,
             approval_status=approval_status,
+            agentic_decision=agentic_decision,
             timeline=timeline,
         )
 

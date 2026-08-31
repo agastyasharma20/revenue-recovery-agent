@@ -146,6 +146,18 @@ export function CaseDrilldown({ runId }: { runId: string }) {
                     <tr><td>Compliance</td><td>{detail.payload.compliance.allowed ? <span className="badge badge-success">allowed</span> : <span className="badge badge-danger">blocked</span>} (rules v{detail.payload.compliance.rules_version})</td></tr>
                     <tr><td>Reason</td><td style={{ fontSize: 12 }}>{detail.payload.compliance.reason}</td></tr>
                     <tr><td>Chosen action</td><td><span className="badge badge-brand">{detail.payload.chosen_action}</span></td></tr>
+                    {detail.payload.agentic_decision && (
+                      <tr><td>Picked by</td><td>
+                        <span className={`badge ${detail.payload.agentic_decision.source === 'llm' ? 'badge-success' : 'badge-muted'}`}>
+                          {detail.payload.agentic_decision.source === 'llm'
+                            ? `LLM (${detail.payload.agentic_decision.llm_provider})`
+                            : 'deterministic fallback'}
+                        </span>
+                        <p style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 4 }}>
+                          "{detail.payload.agentic_decision.rationale}"
+                        </p>
+                      </td></tr>
+                    )}
                     <tr><td>Outcome</td><td>
                       {detail.payload.outcome
                         ? (detail.payload.outcome.recovered

@@ -5,7 +5,7 @@
 **Detect. Diagnose. Decide. Recover. Prove it.**
 Built for the **Razorpay AI Buildathon — Track 03: AI Revenue Recovery**
 
-[![Tests](https://img.shields.io/badge/tests-87%2F87%20passing-brightgreen?style=for-the-badge)](#reproduce-every-number)
+[![Tests](https://img.shields.io/badge/tests-94%2F94%20passing-brightgreen?style=for-the-badge)](#reproduce-every-number)
 [![Python](https://img.shields.io/badge/python-3.12-blue?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-Vite%20%2B%20TS-61DAFB?style=for-the-badge&logo=react&logoColor=white)](frontend/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-WebSocket-009688?style=for-the-badge&logo=fastapi&logoColor=white)](backend/)
@@ -105,10 +105,13 @@ they're rehearsal material for us, not something a judge needs to read here.*
   │       24h min gap, 7-day pursuit window, 24h mandate cooldown) --       │
   │       B2B receivables get their own 90-day AR-aging pursuit window      │
   │                        │                                                │
-  │  4. ACT        core/policy.py                                            │
-  │       deterministic diagnosis-informed picker (default) OR                │
-  │       Thompson Sampling / core/contextual_bandit.py LinUCB                │
-  │       (learns purely from outcome feedback, no hardcoded mapping)         │
+  │  4. ACT        core/policy.py / core/agentic_policy.py                    │
+  │       THREE selectable mechanisms: deterministic diagnosis-informed        │
+  │       picker (default) OR Thompson Sampling / LinUCB bandit (learns        │
+  │       purely from outcome feedback, no hardcoded mapping) OR agentic       │
+  │       (a real LLM call chooses the action -- bounded to only the           │
+  │       compliance-ALREADY-allowed candidates; an out-of-list response       │
+  │       is rejected and falls back, never executed)                          │
   │       -- channels: retry, alt-method, SMS, email, WhatsApp,                │
   │       discount, update-payment-link, human call, collections               │
   │                        │                                                    │
@@ -166,7 +169,7 @@ flowchart TD
     D -->|"EV <= 0"| Z1["Closed: not pursued"]
     D -->|"EV > 0"| E["Compliance check<br/>core/compliance.py"]
     E -->|"blocked"| Z2["Closed: no compliant action"]
-    E -->|"allowed"| F["Select action<br/>core/policy.py / contextual_bandit.py"]
+    E -->|"allowed"| F["Select action<br/>deterministic / bandit / agentic LLM<br/>(agentic: bounded to allowed candidates only)"]
     F --> G{"Needs human approval?<br/>core/approval.py"}
     G -->|"yes, HITL mode"| H["Pending approval queue"]
     H -->|"approved"| I["Execute action"]
@@ -190,7 +193,7 @@ Razorpay's own wording, and where each piece of it lives in this repo:
 | Track 03 says | Where it lives here |
 |---|---|
 | "detects revenue at risk... payment failures and checkout abandonment to overdue receivables" | `core/schema.py` unifies all three; `data/generate_synthetic.py` generates realistic mixes of each |
-| "determines the right intervention" | `core/classifier.py` diagnosis + `core/prioritizer.py` EV + `core/policy.py` (deterministic) / `core/contextual_bandit.py` (learned) |
+| "determines the right intervention" | `core/classifier.py` diagnosis + `core/prioritizer.py` EV + `core/policy.py` (deterministic) / `core/contextual_bandit.py` (learned) / `core/agentic_policy.py` (a real LLM decides, bounded to compliance-allowed candidates) |
 | "executes a bounded recovery workflow" | `core/compliance.py` (NPCI + AR-aging stopping rules) + `core/approval.py` (human sign-off gate) bound every execution; every case's exact lifecycle is an explicit, inspectable timeline (`DecisionRecord.timeline`), not just a final decision |
 | "measured money recovered across a batch" | `run_evaluation.py`, `core/metrics.py` -- real numbers below, not claims |
 | "compliant escalation, stopping rules" | `core/rules.yaml` (versioned, auditable) + `tests/test_compliance.py` |
@@ -207,19 +210,31 @@ Razorpay's own wording, and where each piece of it lives in this repo:
 
 Track 03's bar, read literally, is: detect, decide, act within bounds, measure,
 prove. Most ways to satisfy that bar stop at "detect a failure, fire a
-templated reminder, log it." Two design choices here go further, on purpose:
+templated reminder, log it." Three design choices here go further, on purpose:
 
-1. **The action-picker doesn't stop at deterministic rules.** A
+1. **A real LLM chooses the action — genuinely agentic, not a wrapper.**
+   `core/agentic_policy.py` (`policy_mode="agentic"`) sends a case to Groq/
+   Gemini and lets the model pick the recovery action itself, with a
+   real, case-specific rationale — most Track 03 entries that mention an
+   "AI agent" use the LLM for text generation only, while deterministic
+   code always picks the action. The bound that makes this safe to ship:
+   the LLM is only ever shown actions `core/compliance.py` has *already*
+   approved for this exact case, and if it returns anything else (a
+   hallucinated action, or a real action outside that list), the response
+   is rejected outright and the engine falls back to the deterministic
+   policy's top pick — `tests/test_agentic_policy.py` proves this by
+   simulating exactly that attempt and checking it never executes.
+2. **The action-picker doesn't stop at deterministic rules, either.** A
    contextual bandit (`core/contextual_bandit.py`) and a separately-trained
    supervised model (`core/ml_recovery_model.py`) both *learn* which action
    fits which situation from outcome feedback — zero reason→action mapping
    hardcoded anywhere the bandit can reach. That's the difference between
    "if declined_reason == X, send Y" and a system that would still work if
    customer behavior shifted next quarter.
-2. **Every claim in this README is falsifiable, not asserted.** The
+3. **Every claim in this README is falsifiable, not asserted.** The
    knapsack producing a *worse* answer than greedy, the ML model's recall
    looking broken at the default threshold, the rupee gap being B2B-driven
-   — all six bugs below were caught by treating a suspicious number as a
+   — all seven bugs below were caught by treating a suspicious number as a
    bug report against yourself, not a result to write down. A judge can
    re-run every one of them (see "Reproduce every number") and get the same
    answer, including the same honest caveats.
@@ -321,7 +336,7 @@ model until inspection showed AUC was fine — fixed by tuning the
 threshold on a validation split (never the test set) and reporting the
 full precision/recall tradeoff instead of one number.
 
-**Tests**: 87/87 passing (`python -m pytest tests/ -v`), including audit-chain
+**Tests**: 94/94 passing (`python -m pytest tests/ -v`), including audit-chain
 tamper detection, all compliance rules (NPCI + B2B AR-aging), a seeded
 systemic-incident spike, idempotent webhook ingestion, Razorpay signature
 verification, promise-tracking feedback, the approval gate, real payment-link
@@ -355,7 +370,12 @@ python unit_economics_demo.py --n 30 --seed 1
 # supervised recovery-probability model: honest AUC/PR-AUC/threshold sweep
 python train_recovery_model_demo.py --n 8000 --seed 1
 
-# full test suite (87 tests across every module above, plus the API)
+# agentic mode: a real LLM picks the action per case, bounded to
+# compliance-allowed candidates only (needs GROQ_API_KEY or GEMINI_API_KEY
+# in .env -- without one, every case cleanly shows the fallback path instead)
+python agentic_policy_demo.py --n 12 --seed 1
+
+# full test suite (94 tests across every module above, plus the API)
 python -m pytest tests/ -v
 
 # dashboards -- React (primary) needs both processes running:
@@ -462,6 +482,15 @@ Rigor means showing the mistakes, not just the passing tests.
    request-id ref in `App.tsx` so only the latest `generateRun` call's
    response is ever applied. Verified with a genuinely single, isolated
    browser session showing exactly one run_id for its whole lifetime.
+7. **`agentic_policy_demo.py` crashed on its first live run** with
+   `UnicodeEncodeError`, not on a contrived input -- a real Groq response's
+   rationale used a Unicode non-breaking hyphen (`‑`, not the plain ASCII
+   `-`), which Windows' default console codepage (cp1252) can't encode.
+   Every other LLM-facing code path in this project stores/serves text as
+   JSON or HTML (both UTF-8 by default) and never hit this; a bare
+   `print()` to a Windows terminal was the one path that could. Fixed by
+   reconfiguring stdout to UTF-8 at the top of the script -- a one-line fix
+   once the actual cause (console codepage, not the API response) was clear.
 
 ---
 
@@ -477,6 +506,7 @@ core/
   approval.py                      human-in-the-loop approval gate
   rules.yaml                        versioned compliance + approval thresholds
   policy.py                          deterministic policy + Thompson Sampling bandit
+  agentic_policy.py                    genuine LLM tool-selection, bounded to compliance-allowed candidates
   contextual_bandit.py                 LinUCB contextual bandit
   anomaly.py                            Isolation Forest + root-cause clustering
   portfolio.py                           0/1 knapsack portfolio optimization
@@ -497,11 +527,12 @@ backend/
 frontend/                  React + Vite + TypeScript dashboard (primary UI)
 dashboard/
   app.py                   Streamlit dashboard (lighter alternative)
-tests/                     87 tests across every module above plus the API
+tests/                     94 tests across every module above plus the API
 run_evaluation.py           baseline vs agent, multi-seed
 bandit_convergence_demo.py  bandit convergence proof
 portfolio_demo.py           knapsack vs greedy proof
 promise_tracking_demo.py    reliability feedback loop proof
+agentic_policy_demo.py      LLM picks the action, bounded to compliance-allowed candidates
 webhook_server.py           Flask Razorpay webhook receiver
 .env.example                 template for Razorpay/Groq credentials
 ```

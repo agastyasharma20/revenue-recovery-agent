@@ -29,7 +29,7 @@ async function postJSON<T>(path: string, body?: unknown): Promise<T> {
 export interface CreateRunParams {
   n: number
   seed: number
-  policy_mode: 'deterministic' | 'bandit'
+  policy_mode: 'deterministic' | 'bandit' | 'agentic'
   inject_spike: boolean
   use_llm: boolean
   auto_approve: boolean

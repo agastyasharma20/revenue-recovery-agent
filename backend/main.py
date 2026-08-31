@@ -103,8 +103,16 @@ def health():
 def create_run(req: CreateRunRequest):
     if req.n < 10 or req.n > 5000:
         raise HTTPException(400, "n must be between 10 and 5000")
-    if req.policy_mode not in ("deterministic", "bandit"):
-        raise HTTPException(400, "policy_mode must be 'deterministic' or 'bandit'")
+    if req.policy_mode not in ("deterministic", "bandit", "agentic"):
+        raise HTTPException(400, "policy_mode must be 'deterministic', 'bandit', or 'agentic'")
+    if req.policy_mode == "agentic" and req.n > 80:
+        # Unlike the other two modes, agentic makes one real, sequential LLM
+        # call PER PURSUED EVENT (that's the point -- a real model choosing a
+        # real action, not a cached/simulated one). At batch scale that's
+        # slow, burns free-tier rate limits fast, and would sit past most
+        # hosts' request timeout. Capped here rather than silently letting a
+        # 2000-event agentic request hang for many minutes.
+        raise HTTPException(400, "agentic mode makes one real LLM call per pursued event -- keep n <= 80 for a batch")
 
     run = run_store.create_run(
         n=req.n, seed=req.seed, policy_mode=req.policy_mode,
