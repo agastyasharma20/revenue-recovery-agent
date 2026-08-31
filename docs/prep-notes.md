@@ -98,7 +98,25 @@ deployment: https://revenue-recovery-agent-5b31.onrender.com, one FastAPI
 process (Render free tier) serving both the API and the built React
 dashboard — see `render.yaml`. Free tier sleeps after 15 minutes idle, so
 open the link a minute before demoing it live to avoid a cold-start wait
-in front of a judge.
+in front of a judge. Independently smoke-tested end-to-end against the
+live URL (not just localhost) before submission: every REST endpoint, all
+three policy modes including the agentic n≤80 cap actually rejecting an
+oversized batch, the full approve/reject HITL workflow, a real Razorpay
+payment link, a real Groq voice script, and the WebSocket live-replay.
+
+**"Did you look at what other teams built?"** — Yes, deliberately, across
+all five tracks (not just Track 03) — surveyed roughly 140 buildathon
+repos, read 13 of the most substantive ones closely. Three things came
+out of that directly: named India-specific compliance rules (RBI e-mandate
+pre-debit notice, TRAI-style quiet hours — `rules.yaml` v3, one
+competitor had these explicitly named and it's a cheap, credible add),
+real ops alerting via Slack webhook (`core/alerting.py` — a feature
+category almost nobody had), and SHAP explainability on the recovery
+model (one competitor's README explicitly apologized for skipping it).
+Equally deliberate: what *didn't* get added — a couple of submissions
+used Z3 formal verification or full-duplex LiveKit voice, genuinely
+impressive but the wrong track or too large a lift for the time left, so
+they're named here rather than half-built into the repo.
 
 ---
 

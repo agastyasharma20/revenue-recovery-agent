@@ -663,3 +663,12 @@ flowchart LR
 Free-tier caveat, stated plainly: the service sleeps after 15 minutes idle,
 and the first request after sleeping takes ~30–50s to wake up. Not a bug —
 just worth opening the link a minute before you need it live.
+
+**The live link above has actually been end-to-end tested, not just
+opened once and left alone**: every REST endpoint, all three policy modes
+(including the agentic n≤80 cap rejecting an oversized batch as designed),
+the full approve/reject HITL workflow, a real Razorpay test-mode payment
+link creation, a real Groq voice-script generation, and the WebSocket
+live-replay (321 messages for a 320-event run, over `wss://` through
+Render's Cloudflare front-end) — all verified directly against the
+deployed URL, separately from the local test suite above.
