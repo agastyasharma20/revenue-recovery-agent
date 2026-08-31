@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from backend.state import run_store, RunState
 from core.audit import AuditLog, verify_chain
+from core import alerting
 from core.metrics import summarize
 from core.portfolio import build_cases, compare as portfolio_compare
 from core.voice_recovery import generate_voice_script
@@ -194,6 +195,14 @@ def get_case_detail(run_id: str, event_id: str):
 def verify_audit(run_id: str):
     run = _get_run_or_404(run_id)
     result = verify_chain(run.audit_path)
+    if not result.ok:
+        # A broken hash chain is a security incident, not a UI banner --
+        # page someone immediately if alerting is configured.
+        alerting.send_alert(
+            "audit_chain_broken",
+            f"Audit chain integrity check FAILED for run {run_id}: {result.detail}",
+            context={"run_id": run_id, "first_bad_index": result.first_bad_index, "total_records": result.total_records},
+        )
     return {
         "ok": result.ok,
         "total_records": result.total_records,

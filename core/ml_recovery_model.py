@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import numpy as np
+import shap
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
@@ -117,9 +118,10 @@ class ModelEvaluation:
     n_train: int
     n_test: int
     positive_rate_test: float
-    top_features: list  # [(name, importance), ...] sorted descending
+    top_features: list  # [(name, importance), ...] sorted descending -- GBM's built-in impurity-based importance
     threshold_used: float
     threshold_sweep: list  # [(threshold, precision, recall, f1), ...] -- the full picture, not one cherry-picked point
+    shap_top_features: list  # [(name, mean_abs_shap), ...] on a sample of the test set -- see train_and_evaluate's docstring note
 
 
 class RecoveryProbabilityModel:
@@ -128,6 +130,7 @@ class RecoveryProbabilityModel:
             n_estimators=150, max_depth=3, learning_rate=0.1, random_state=random_state
         )
         self._fitted = False
+        self._explainer: shap.TreeExplainer | None = None  # built lazily -- only if explain() is actually called
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> "RecoveryProbabilityModel":
         self.model.fit(X, y)
@@ -139,6 +142,25 @@ class RecoveryProbabilityModel:
             raise RuntimeError("call fit() or train_and_evaluate() first")
         x = encode(event, action, now).reshape(1, -1)
         return float(self.model.predict_proba(x)[0][1])
+
+    def explain(self, event: RevenueEvent, action: Action, now: datetime, top_n: int = 5) -> list[tuple[str, float]]:
+        """Per-CASE SHAP feature attribution -- distinct from
+        feature_importances_ (a single global ranking with no sign): this
+        answers "why did THIS specific prediction come out this way",
+        signed (positive pushes recovery probability up, negative pushes it
+        down), for one instance. shap.TreeExplainer reads the trained
+        GradientBoostingClassifier's tree structure directly (exact, not a
+        model-agnostic approximation) -- no separate surrogate model, no
+        extra training. Returns the top_n features by |contribution|,
+        largest first."""
+        if not self._fitted:
+            raise RuntimeError("call fit() or train_and_evaluate() first")
+        if self._explainer is None:
+            self._explainer = shap.TreeExplainer(self.model)
+        x = encode(event, action, now).reshape(1, -1)
+        shap_values = self._explainer.shap_values(x)[0]
+        contributions = sorted(zip(FEATURE_NAMES, shap_values), key=lambda t: -abs(t[1]))
+        return [(name, float(value)) for name, value in contributions[:top_n]]
 
 
 def train_and_evaluate(n_samples: int = 8000, seed: int = 1, test_size: float = 0.2) -> tuple[RecoveryProbabilityModel, ModelEvaluation]:
@@ -186,6 +208,23 @@ def train_and_evaluate(n_samples: int = 8000, seed: int = 1, test_size: float = 
     final_pred = (test_proba >= best_threshold).astype(int)
     importances = sorted(zip(FEATURE_NAMES, model.model.feature_importances_), key=lambda t: -t[1])
 
+    # SHAP-based importance, mean(|shap_value|) across a sample of the test
+    # set -- capped at 300 rows because TreeExplainer's per-sample cost adds
+    # up at full test-set scale (n_test can be ~1,300 at the default n=8000)
+    # and this is a reporting statistic, not a per-decision computation.
+    # Worth computing and showing SEPARATELY from feature_importances_ above
+    # rather than just trusting one: GBM's built-in impurity-based
+    # importance is known to bias toward high-cardinality one-hot groups
+    # (this model has several), while SHAP importance doesn't share that
+    # bias -- if the two rankings noticeably disagree, that's a real,
+    # reportable fact about this model, not a discrepancy to paper over.
+    explainer = shap.TreeExplainer(model.model)
+    shap_sample_size = min(300, len(X_test))
+    shap_sample = X_test[:shap_sample_size]
+    shap_values_sample = explainer.shap_values(shap_sample)
+    mean_abs_shap = np.abs(shap_values_sample).mean(axis=0)
+    shap_importances = sorted(zip(FEATURE_NAMES, mean_abs_shap), key=lambda t: -t[1])
+
     evaluation = ModelEvaluation(
         auc=roc_auc_score(y_test, test_proba),
         average_precision=average_precision_score(y_test, test_proba),
@@ -199,5 +238,6 @@ def train_and_evaluate(n_samples: int = 8000, seed: int = 1, test_size: float = 
         top_features=importances[:10],
         threshold_used=best_threshold,
         threshold_sweep=threshold_sweep,
+        shap_top_features=[(name, float(v)) for name, v in shap_importances[:10]],
     )
     return model, evaluation

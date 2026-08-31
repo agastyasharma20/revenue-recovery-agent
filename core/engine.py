@@ -28,6 +28,7 @@ from core.circuit_breaker import CircuitBreaker
 from core.logging_config import get_logger
 from core.promise_tracking import PromiseTracker, Promise
 from core.approval import ApprovalGate
+from core import alerting
 
 
 @dataclass
@@ -267,6 +268,11 @@ class RecoveryEngine:
                 if requires_approval and not self.auto_approve:
                     approval_status = "pending"  # execution deferred -- see approve()/reject()
                     timeline.append(self._timeline_entry("pending_approval", approval_reason, datetime.now(timezone.utc)))
+                    alerting.send_alert(
+                        "pending_approval",
+                        f"{chosen_action.value} on {event.source.value} (Rs.{event.amount:,.0f}) needs sign-off: {approval_reason}",
+                        context={"event_id": event.event_id, "customer_segment": event.customer_segment.value},
+                    )
                 else:
                     approval_status = "auto_approved" if requires_approval else "not_required"
                     if requires_approval:

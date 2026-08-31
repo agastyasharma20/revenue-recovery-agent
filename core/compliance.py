@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import yaml
@@ -39,6 +39,8 @@ class ComplianceChecker:
         self.version = self.rules.get("version", 0)
         self._m = self.rules["npci_mandate_retry"]
         self._b2b = self.rules.get("b2b_receivables", {})
+        self._contact_hours = self.rules.get("customer_contact_hours", {})
+        self._rbi_notice = self.rules.get("rbi_mandate_notice", {})
 
     def _pursuit_window_days(self, event: RevenueEvent) -> int:
         """B2B receivables follow accounts-receivable aging conventions
@@ -76,6 +78,45 @@ class ComplianceChecker:
             Action.RETRY_WITH_ALTERNATE_METHOD,
         )
         applies_to_mandate_flow = event.source == EventSource.SUBSCRIPTION_FAILED
+
+        # 1b. RBI e-mandate pre-debit notice: a mandate above the threshold
+        #     can't be auto-retried on its very first attempt with zero
+        #     prior notice sent -- see rules.yaml's rbi_mandate_notice.
+        notice_threshold = self._rbi_notice.get("pre_debit_notice_required_above_inr")
+        if (
+            notice_threshold is not None
+            and is_retry_action
+            and applies_to_mandate_flow
+            and event.amount > notice_threshold
+            and event.retry_count == 0
+        ):
+            return ComplianceResult(
+                False,
+                f"RBI e-mandate pre-debit notice required before auto-retrying "
+                f"Rs.{event.amount:,.0f} (> Rs.{notice_threshold:,.0f}) on the first "
+                f"attempt -- a reminder must reach the customer first.",
+                v,
+            )
+
+        # 1c. TRAI-style customer-contact quiet hours (09:00-21:00 IST) for
+        #     actions that directly reach the customer -- see rules.yaml's
+        #     customer_contact_hours. Applies regardless of event source
+        #     (a checkout-abandonment SMS at 11pm IST is just as restricted
+        #     as a subscription reminder).
+        restricted_actions = set(self._contact_hours.get("restricted_actions", []))
+        if candidate_action.value in restricted_actions:
+            ist_now = now.astimezone(timezone.utc) + timedelta(hours=5, minutes=30)
+            start = self._contact_hours.get("quiet_hours_start_ist", 21)
+            end = self._contact_hours.get("quiet_hours_end_ist", 9)
+            in_quiet_hours = ist_now.hour >= start or ist_now.hour < end
+            if in_quiet_hours:
+                return ComplianceResult(
+                    False,
+                    f"{candidate_action.value} would land at {ist_now.strftime('%H:%M')} IST, "
+                    f"inside the {start:02d}:00-{end:02d}:00 quiet-hours window "
+                    f"(TRAI-style customer-contact restriction).",
+                    v,
+                )
 
         if is_retry_action and applies_to_mandate_flow:
             # 2. Max retries.

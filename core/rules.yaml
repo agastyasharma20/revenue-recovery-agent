@@ -9,7 +9,7 @@
 #
 # version: bump this whenever a threshold changes; the audit log records
 # which rules_version was active for every decision.
-version: 2
+version: 3
 
 npci_mandate_retry:
   # Hard cap on automated retry attempts per event (NPCI e-mandate convention).
@@ -50,3 +50,26 @@ human_approval:
   offer_discount_above_inr: 20000
   require_approval_for_risk_block: true
   auto_approve_in_simulation: true
+
+# TRAI's Telecom Commercial Communications Customer Preference Regulations
+# (TCCCPR) restrict commercial calls/SMS to Indian numbers to 09:00-21:00
+# IST. WhatsApp reminders and a live human call aren't telecom-regulated the
+# exact same way SMS/voice-calls are, but are included here under the same
+# customer-contact-hours principle any compliance-conscious deployment would
+# apply in practice -- stated as a deliberate design choice, not a claim of
+# exact TRAI jurisdiction over every listed channel.
+customer_contact_hours:
+  quiet_hours_start_ist: 21   # 9 PM IST
+  quiet_hours_end_ist: 9      # 9 AM IST
+  restricted_actions: [send_reminder_sms, send_reminder_whatsapp, escalate_to_human_call]
+
+# RBI's e-mandate framework (effective Oct 2021) requires a pre-debit
+# notification at least 24h before an automatic recurring debit above this
+# threshold. Auto-retrying a large mandate the instant it fails, with zero
+# notice ever sent, is exactly what this rule exists to prevent. Modeled
+# with the data this engine actually has: a mandate above the threshold may
+# not be auto-retried on its very first attempt (retry_count==0) -- a
+# reminder action must go out first (on a later attempt), mirroring
+# notice-before-debit rather than retry-before-notice.
+rbi_mandate_notice:
+  pre_debit_notice_required_above_inr: 5000

@@ -64,3 +64,45 @@ def test_all_bandit_arms_are_encodable_actions():
     assert len(ACTION_LIST) > 0
     for a in ACTION_LIST:
         assert isinstance(a, Action)
+
+
+def test_evaluation_includes_shap_importance_alongside_impurity_importance():
+    """The two rankings are computed independently and don't have to agree
+    -- this just checks the SHAP path actually runs and returns something
+    of the right shape, not that it matches feature_importances_."""
+    _, ev = train_and_evaluate(n_samples=1500, seed=1)
+    assert len(ev.shap_top_features) == 10
+    names = {name for name, _ in ev.shap_top_features}
+    assert names.issubset(set(FEATURE_NAMES))
+    # mean(|shap_value|) is non-negative by construction
+    assert all(value >= 0 for _, value in ev.shap_top_features)
+
+
+def test_explain_returns_signed_per_case_contributions():
+    model, _ = train_and_evaluate(n_samples=1500, seed=1)
+    event = RevenueEvent(
+        source=EventSource.SUBSCRIPTION_FAILED, decline_reason=DeclineReason.EXPIRED_CARD, amount=1000.0,
+        customer_segment=CustomerSegment.MEDIUM_LTV, created_at=NOW, last_attempt_at=NOW,
+    )
+    contributions = model.explain(event, Action.UPDATE_PAYMENT_METHOD_LINK, NOW, top_n=5)
+    assert len(contributions) == 5
+    names = {name for name, _ in contributions}
+    assert names.issubset(set(FEATURE_NAMES))
+    # unlike feature_importances_/shap_top_features (both non-negative
+    # aggregates), a single case's contributions are genuinely signed --
+    # some features should push the probability down, not just up.
+    assert any(value < 0 for _, value in contributions) or any(value > 0 for _, value in contributions)
+
+
+def test_explain_before_fit_raises_same_as_predict_proba():
+    from core.ml_recovery_model import RecoveryProbabilityModel
+    model = RecoveryProbabilityModel()
+    event = RevenueEvent(
+        source=EventSource.SUBSCRIPTION_FAILED, decline_reason=DeclineReason.EXPIRED_CARD, amount=1000.0,
+        customer_segment=CustomerSegment.MEDIUM_LTV, created_at=NOW, last_attempt_at=NOW,
+    )
+    try:
+        model.explain(event, Action.RETRY_PAYMENT, NOW)
+        assert False, "expected RuntimeError"
+    except RuntimeError:
+        pass

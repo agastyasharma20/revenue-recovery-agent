@@ -113,6 +113,74 @@ def test_b2b_receivables_use_a_longer_pursuit_window_than_subscriptions():
     assert result2.allowed is False
 
 
+def test_rbi_pre_debit_notice_blocks_first_attempt_retry_above_threshold():
+    """RBI's e-mandate framework requires a pre-debit notice at least 24h
+    before an automatic debit above the threshold -- auto-retrying a large
+    mandate the instant it fails, with zero notice ever sent, is exactly
+    what this rule exists to catch."""
+    checker = ComplianceChecker()
+    large_first_attempt = _event(amount=7500.0, retry_count=0)
+    result = checker.check(large_first_attempt, Action.RETRY_PAYMENT, now=NOW)
+    assert result.allowed is False
+    assert "RBI e-mandate pre-debit notice" in result.reason
+
+
+def test_rbi_pre_debit_notice_does_not_block_below_threshold():
+    checker = ComplianceChecker()
+    small_first_attempt = _event(amount=1500.0, retry_count=0)
+    result = checker.check(small_first_attempt, Action.RETRY_PAYMENT, now=NOW)
+    assert result.allowed is True
+
+
+def test_rbi_pre_debit_notice_does_not_block_once_a_notice_could_have_gone_out():
+    """The rule only bites on retry_count==0 (the very first, unnoticed
+    attempt) -- once retry_count > 0, a reminder had the chance to reach the
+    customer first, so the notice requirement is satisfied by construction
+    of the retry sequence."""
+    checker = ComplianceChecker()
+    already_retried_once = _event(amount=7500.0, retry_count=1, last_attempt_at=NOW - timedelta(hours=30))
+    result = checker.check(already_retried_once, Action.RETRY_PAYMENT, now=NOW)
+    assert result.allowed is True
+
+
+def test_rbi_pre_debit_notice_does_not_block_non_retry_actions():
+    """A reminder IS how the notice gets delivered -- it must never be
+    blocked by the very rule it satisfies."""
+    checker = ComplianceChecker()
+    large_first_attempt = _event(amount=7500.0, retry_count=0)
+    result = checker.check(large_first_attempt, Action.SEND_REMINDER_WHATSAPP, now=NOW)
+    assert result.allowed is True
+
+
+def test_trai_quiet_hours_blocks_sms_at_night_ist():
+    checker = ComplianceChecker()
+    event = _event()
+    # 2026-08-29 20:00 UTC = 2026-08-30 01:30 IST -- well inside quiet hours.
+    night_ist = datetime(2026, 8, 29, 20, 0, 0, tzinfo=timezone.utc)
+    result = checker.check(event, Action.SEND_REMINDER_SMS, now=night_ist)
+    assert result.allowed is False
+    assert "quiet-hours" in result.reason
+
+
+def test_trai_quiet_hours_allows_sms_during_the_day_ist():
+    checker = ComplianceChecker()
+    event = _event()
+    # 2026-08-29 12:00 UTC = 17:30 IST -- daytime.
+    day_ist = datetime(2026, 8, 29, 12, 0, 0, tzinfo=timezone.utc)
+    result = checker.check(event, Action.SEND_REMINDER_SMS, now=day_ist)
+    assert result.allowed is True
+
+
+def test_trai_quiet_hours_does_not_restrict_unlisted_actions():
+    """Email/retry/collections aren't in restricted_actions -- quiet hours
+    is deliberately scoped to direct-contact channels, not everything."""
+    checker = ComplianceChecker()
+    event = _event()
+    night_ist = datetime(2026, 8, 29, 20, 0, 0, tzinfo=timezone.utc)
+    result = checker.check(event, Action.SEND_REMINDER_EMAIL, now=night_ist)
+    assert result.allowed is True
+
+
 def test_non_subscription_sources_are_exempt_from_mandate_retry_rules():
     """A checkout-abandonment reminder or a B2B collections call isn't an
     e-mandate retry -- NPCI retry-cap/gap rules shouldn't apply to it even

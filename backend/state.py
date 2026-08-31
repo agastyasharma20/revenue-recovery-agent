@@ -17,6 +17,7 @@ from typing import Optional
 from core.engine import RecoveryEngine, DecisionRecord
 from core.schema import RevenueEvent
 from core.anomaly import detect_systemic_incidents, SystemicIncident
+from core import alerting
 from data.generate_synthetic import generate_batch
 
 
@@ -81,6 +82,13 @@ class RunStore:
         )
         records = engine.process_batch(events, now=now)
         incidents = detect_systemic_incidents(events, window_hours=2.0, threshold=15)
+        for incident in incidents:
+            alerting.send_alert(
+                "systemic_incident",
+                incident.message,
+                context={"decline_reason": incident.decline_reason.value, "count": incident.count,
+                         "amount_bucket": incident.amount_bucket, "run_id": run_id},
+            )
 
         state = RunState(
             run_id=run_id,

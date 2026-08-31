@@ -5,7 +5,7 @@
 **Detect. Diagnose. Decide. Recover. Prove it.**
 Built for the **Razorpay AI Buildathon — Track 03: AI Revenue Recovery**
 
-[![Tests](https://img.shields.io/badge/tests-94%2F94%20passing-brightgreen?style=for-the-badge)](#reproduce-every-number)
+[![Tests](https://img.shields.io/badge/tests-111%2F111%20passing-brightgreen?style=for-the-badge)](#reproduce-every-number)
 [![Python](https://img.shields.io/badge/python-3.12-blue?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-Vite%20%2B%20TS-61DAFB?style=for-the-badge&logo=react&logoColor=white)](frontend/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-WebSocket-009688?style=for-the-badge&logo=fastapi&logoColor=white)](backend/)
@@ -100,10 +100,12 @@ they're rehearsal material for us, not something a judge needs to read here.*
   │       repeat customer's promise-to-pay track record (see #6)        │
   │       negative EV -> "do not pursue", logged with why                │
   │                        │                                             │
-  │  3. COMPLIANCE  core/compliance.py + core/rules.yaml                  │
+  │  3. COMPLIANCE  core/compliance.py + core/rules.yaml (v3)             │
   │       NPCI-style stopping rules for subscriptions (max 3 retries,      │
   │       24h min gap, 7-day pursuit window, 24h mandate cooldown) --       │
-  │       B2B receivables get their own 90-day AR-aging pursuit window      │
+  │       B2B receivables get their own 90-day AR-aging pursuit window --    │
+  │       plus RBI e-mandate pre-debit notice (>=Rs.5k, first attempt) and    │
+  │       TRAI-style customer-contact quiet hours (21:00-09:00 IST)            │
   │                        │                                                │
   │  4. ACT        core/policy.py / core/agentic_policy.py                    │
   │       THREE selectable mechanisms: deterministic diagnosis-informed        │
@@ -130,15 +132,15 @@ they're rehearsal material for us, not something a judge needs to read here.*
   │       alteration/deletion/reordering                                                │
   └──────────────────────────────────────────────────────────────────────────────────────┘
               │
-   ┌──────────┼───────────┬─────────────────┬───────────────────┐
-   v          v            v                 v                   v
-core/      core/       core/            core/voice_        core/metrics.py
-anomaly.py portfolio.py razorpay_       recovery.py         /metrics summary:
-Isolation  0/1 knapsack integration.py  Hinglish call        recovery rate,
-Forest +   (exact DP)   real webhook    script generation     latency/layer,
-rolling-   vs greedy    signature       via LLM (honest       LLM fallback
-window     top-N-by-EV  verify + parse  template fallback)    rate
-clustering for human-
+   ┌──────────┼───────────┬─────────────────┬───────────────────┬───────────────┐
+   v          v            v                 v                   v               v
+core/      core/       core/            core/voice_        core/metrics.py  core/alerting.py
+anomaly.py portfolio.py razorpay_       recovery.py         /metrics summary: real Slack-webhook
+Isolation  0/1 knapsack integration.py  Hinglish call        recovery rate,   POST on a systemic
+Forest +   (exact DP)   real webhook    script generation     latency/layer,   incident, a pending
+rolling-   vs greedy    signature       via LLM (honest       LLM fallback     approval, or a broken
+window     top-N-by-EV  verify + parse  template fallback)    rate             audit chain -- no-op
+clustering for human-                                                          without a webhook URL
 -> incident review
    flag    capacity
               │
@@ -196,8 +198,9 @@ Razorpay's own wording, and where each piece of it lives in this repo:
 | "determines the right intervention" | `core/classifier.py` diagnosis + `core/prioritizer.py` EV + `core/policy.py` (deterministic) / `core/contextual_bandit.py` (learned) / `core/agentic_policy.py` (a real LLM decides, bounded to compliance-allowed candidates) |
 | "executes a bounded recovery workflow" | `core/compliance.py` (NPCI + AR-aging stopping rules) + `core/approval.py` (human sign-off gate) bound every execution; every case's exact lifecycle is an explicit, inspectable timeline (`DecisionRecord.timeline`), not just a final decision |
 | "measured money recovered across a batch" | `run_evaluation.py`, `core/metrics.py` -- real numbers below, not claims |
-| "compliant escalation, stopping rules" | `core/rules.yaml` (versioned, auditable) + `tests/test_compliance.py` |
+| "compliant escalation, stopping rules" | `core/rules.yaml` v3 (versioned, auditable) + `tests/test_compliance.py`; named India-specific rules, not just generic caps -- RBI e-mandate pre-debit notice (>=Rs.5,000, first attempt) and TRAI-style customer-contact quiet hours (21:00-09:00 IST) |
 | "an audit trail" | `core/audit.py` SHA-256 hash chain + `tests/test_audit_chain.py` proving tamper detection |
+| (not named, added anyway) real-time ops alerting | `core/alerting.py` -- a genuine Slack-webhook POST on a systemic incident, a case pausing for approval, or a broken audit chain; verified against a real local HTTP server in `tests/test_alerting.py`, not mocked |
 | Example: "B2B receivables chasing" | `EventSource.B2B_RECEIVABLE_OVERDUE`, `Action.ESCALATE_TO_COLLECTIONS`, 90-day pursuit window |
 | Example: "Mandate retry sequencing" | `core/compliance.py`'s NPCI e-mandate rules (max 3 retries, 24h gap, 24h post-creation cooldown) |
 | Example: "Promise-to-pay tracking" | `core/promise_tracking.py` -- and it *feeds back* into the next invoice's EV, not just logged |
@@ -334,15 +337,49 @@ Caught a real issue building this: the default classification threshold
 gave recall ≈ 0.04 on this imbalanced data, which looked like a broken
 model until inspection showed AUC was fine — fixed by tuning the
 threshold on a validation split (never the test set) and reporting the
-full precision/recall tradeoff instead of one number.
+full precision/recall tradeoff instead of one number. Now also reports
+**SHAP explainability** (`core/ml_recovery_model.py`'s `explain()`) —
+both a global mean-|SHAP| ranking computed *separately* from the GBM's
+built-in impurity-based importance (only 2/5 of the top features agree
+between the two rankings on a real run — reported as measured, not
+smoothed over) and a genuine per-case, signed explanation ("why did THIS
+specific prediction come out this way") for the human approver, not just
+a global feature list.
 
-**Tests**: 94/94 passing (`python -m pytest tests/ -v`), including audit-chain
-tamper detection, all compliance rules (NPCI + B2B AR-aging), a seeded
-systemic-incident spike, idempotent webhook ingestion, Razorpay signature
-verification, promise-tracking feedback, the approval gate, real payment-link
-creation's fallback paths, the case-timeline state machine, the multi-provider
-LLM fallback logic, unit-economics math, the ML model's evaluation honesty,
-and the FastAPI backend (including a live WebSocket replay test).
+**India-specific compliance rules** (`core/compliance.py` + `rules.yaml`
+v3, `python india_compliance_demo.py`): RBI e-mandate pre-debit notice
+(a mandate ≥Rs.5,000 can't be auto-retried on its first attempt with zero
+notice sent) and TRAI-style customer-contact quiet hours (21:00–09:00
+IST, blocks SMS/WhatsApp/human-call actions). **Honestly, neither rule
+fires in the default `run_evaluation.py` batch** — its subscription
+amounts are consumer-subscription-scale (Rs.235–4,979 for first-attempt
+events, never crossing Rs.5,000) and the batch evaluator uses one fixed
+daytime timestamp for reproducibility, so quiet hours can't trigger
+inside a single-shot batch either. `india_compliance_demo.py` builds
+cases specifically sized to cross both thresholds so the rules are
+checkable, not just asserted — a small honest gap noted rather than
+tuning the thresholds to make a demo look more dramatic than the real
+regulation is.
+
+**Real-time ops alerting** (`core/alerting.py`): a genuine Slack-compatible
+incoming-webhook POST fires on a systemic incident, a case pausing for
+human approval, or an audit-chain integrity failure — verified against a
+real local HTTP server in `tests/test_alerting.py` (checks the actual
+wire format, not a mock), not against live Slack (no `SLACK_WEBHOOK_URL`
+configured in this deployment — set your own to see it live). No webhook
+configured = every call is a true no-op, same fails-closed philosophy as
+the LLM client.
+
+**Tests**: 111/111 passing (`python -m pytest tests/ -v`), including audit-chain
+tamper detection, all compliance rules (NPCI + B2B AR-aging + RBI pre-debit
+notice + TRAI quiet hours), a seeded systemic-incident spike, idempotent
+webhook ingestion, Razorpay signature verification, promise-tracking
+feedback, the approval gate, real payment-link creation's fallback paths,
+the case-timeline state machine, the multi-provider LLM fallback logic,
+unit-economics math, the ML model's evaluation honesty and its SHAP
+explanations, the agentic policy's out-of-bounds rejection, real ops
+alerts against a real local HTTP server, and the FastAPI backend
+(including a live WebSocket replay test).
 
 ---
 
@@ -367,7 +404,9 @@ python promise_tracking_demo.py --n 1500 --seed 7
 # unit economics: real measured token costs and ROI multiple
 python unit_economics_demo.py --n 30 --seed 1
 
-# supervised recovery-probability model: honest AUC/PR-AUC/threshold sweep
+# supervised recovery-probability model: honest AUC/PR-AUC/threshold sweep,
+# global SHAP importance vs. the GBM's built-in importance, and a real
+# per-case signed SHAP explanation
 python train_recovery_model_demo.py --n 8000 --seed 1
 
 # agentic mode: a real LLM picks the action per case, bounded to
@@ -375,7 +414,12 @@ python train_recovery_model_demo.py --n 8000 --seed 1
 # in .env -- without one, every case cleanly shows the fallback path instead)
 python agentic_policy_demo.py --n 12 --seed 1
 
-# full test suite (94 tests across every module above, plus the API)
+# India-specific compliance rules (RBI pre-debit notice, TRAI quiet hours)
+# actually firing -- sized specifically to cross both thresholds, since the
+# default synthetic batch above never does
+python india_compliance_demo.py
+
+# full test suite (111 tests across every module above, plus the API)
 python -m pytest tests/ -v
 
 # dashboards -- React (primary) needs both processes running:
@@ -433,7 +477,10 @@ same events and the same outcomes.
   delivery of the reminder/voice-script content. Both would need your own
   external accounts (Razorpay test keys + a tunnel; a WhatsApp Business or
   telephony provider) — out of scope for this build, and deliberately not
-  claimed as done.
+  claimed as done. Same status for `core/alerting.py`'s Slack webhook: the
+  HTTP call itself is verified against a real local server
+  (`tests/test_alerting.py`), not against a live Slack workspace — no
+  `SLACK_WEBHOOK_URL` is configured in this deployment.
 - **The dashboards** run the same pipeline live (React app hits a real
   FastAPI backend over HTTP/WebSocket; Streamlit runs it in-process) --
   "live" means "computed when you load the page," not "connected to a
@@ -502,23 +549,25 @@ core/
   classifier.py             rule-based diagnosis + optional Groq LLM refinement
   llm_client.py               shared Groq HTTP client (classifier + voice_recovery)
   prioritizer.py                EV = P(recovery)*amount - cost, reliability-adjusted
-  compliance.py                  NPCI + B2B AR-aging stopping rules (reads rules.yaml)
+  compliance.py                  NPCI + B2B AR-aging + RBI/TRAI rules (reads rules.yaml)
   approval.py                      human-in-the-loop approval gate
-  rules.yaml                        versioned compliance + approval thresholds
+  rules.yaml                        versioned compliance + approval thresholds (v3)
   policy.py                          deterministic policy + Thompson Sampling bandit
   agentic_policy.py                    genuine LLM tool-selection, bounded to compliance-allowed candidates
   contextual_bandit.py                 LinUCB contextual bandit
-  anomaly.py                            Isolation Forest + root-cause clustering
-  portfolio.py                           0/1 knapsack portfolio optimization
-  promise_tracking.py                     promise-to-pay lifecycle + reliability score
-  voice_recovery.py                        Hinglish call-script generation
-  ingestion.py                              idempotent webhook ingestion
-  circuit_breaker.py                         LLM circuit breaker
-  logging_config.py                           structured JSON logging w/ trace_id
-  metrics.py                                   /metrics-style summary
-  razorpay_integration.py                       Razorpay webhook verify + parse
-  outcome_simulator.py                           per-reason x per-action effectiveness
-  engine.py                                       orchestrates all of the above
+  ml_recovery_model.py                  supervised recovery-probability model + SHAP explainability
+  anomaly.py                             Isolation Forest + root-cause clustering
+  portfolio.py                            0/1 knapsack portfolio optimization
+  promise_tracking.py                      promise-to-pay lifecycle + reliability score
+  voice_recovery.py                         Hinglish call-script generation
+  alerting.py                                real Slack-webhook ops alerts (no-op without a URL)
+  ingestion.py                                idempotent webhook ingestion
+  circuit_breaker.py                           LLM circuit breaker
+  logging_config.py                             structured JSON logging w/ trace_id
+  metrics.py                                     /metrics-style summary
+  razorpay_integration.py                         Razorpay webhook verify + parse
+  outcome_simulator.py                             per-reason x per-action effectiveness
+  engine.py                                         orchestrates all of the above
 data/
   generate_synthetic.py    synthetic events + hidden oracle ground truth + B2B customer pool
 backend/
@@ -527,12 +576,13 @@ backend/
 frontend/                  React + Vite + TypeScript dashboard (primary UI)
 dashboard/
   app.py                   Streamlit dashboard (lighter alternative)
-tests/                     94 tests across every module above plus the API
+tests/                     111 tests across every module above plus the API
 run_evaluation.py           baseline vs agent, multi-seed
 bandit_convergence_demo.py  bandit convergence proof
 portfolio_demo.py           knapsack vs greedy proof
 promise_tracking_demo.py    reliability feedback loop proof
 agentic_policy_demo.py      LLM picks the action, bounded to compliance-allowed candidates
+india_compliance_demo.py    RBI pre-debit notice + TRAI quiet hours actually firing
 webhook_server.py           Flask Razorpay webhook receiver
 .env.example                 template for Razorpay/Groq credentials
 ```
