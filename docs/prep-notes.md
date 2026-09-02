@@ -151,69 +151,72 @@ A suggested shot list, timed for a 5-minute cap:
    36.9% vs 11.0% recovery-rate result, and immediately name the B2B-driven
    rupee-scale caveat before a judge can ask about it.
 
-### Literal script (read-aloud version, ~4:40 total — safer margin under 5:00)
+### Literal script (final, read-aloud version — ~4:40, safer margin under 5:00)
 
-Prep before hitting record: open the live URL, let it wake up, run one
-throwaway batch so nothing loads cold on camera. Close everything else.
+Prep before hitting record:
+- Open the live demo (https://revenue-recovery-agent-5b31.onrender.com), let it wake up
+  (free tier sleeps — first load takes 30–50s), run one throwaway batch to warm it.
+- Open the architecture page: https://claude.ai/code/artifact/be6bd588-7894-4112-b561-c655a02285b7
+  — this is what to show during the 0:20–1:00 segment instead of raw README text.
+- Close everything else (notifications, other tabs).
 
 **[0:00–0:20] Hook.**
-> "Razorpay's brief for this track says: don't just detect the problem —
-> show measured money recovered across a batch, with compliant escalation,
-> stopping rules, and an audit trail. That's exactly what I built to answer."
+> "Razorpay's brief for Track 03 says: don't just detect the problem — show
+> measured money recovered across a batch, with compliant escalation,
+> stopping rules, and an audit trail. That's exactly what I built to
+> answer, and everything I'm about to show is live, not a mockup."
 
-**[0:20–0:55] Architecture, one breath per stage.**
-*(Screen: README architecture diagram, or draw the 7 boxes live)*
-> "Every case goes through the same seven stages: diagnose why it failed,
-> prioritize with expected value, check compliance, pick an action, get
-> human approval if it's consequential, simulate the outcome, and log it to
-> a tamper-evident audit chain. No stage is skipped, and every one is
-> logged."
+**[0:20–1:00] Architecture.** *(show the architecture page)*
+> "Every case goes through the same seven stages. Diagnose why it failed.
+> Prioritize with expected value — is it even worth chasing. Check
+> compliance — NPCI retry limits, RBI's pre-debit notice rule, TRAI quiet
+> hours. Pick an action — three different ways, I'll show one in a minute.
+> Get human approval if it's consequential. Simulate the outcome. Log it to
+> a tamper-evident, hash-chained audit trail. No stage is skipped, and
+> every one is logged."
 
-**[0:55–2:10] Live dashboard.**
-*(Screen: the live URL, generate a fresh batch on camera — bandit mode)*
-> "This is live, not a mockup — running right now on Render. I'll generate
-> a batch... here's the incident banner — it just collapsed fifteen
-> individual bank-timeout failures into one systemic incident instead of
-> fifteen separate alerts. Let me drill into one case."
-*(Click a case, scroll through diagnosis → EV → compliance → action → hash)*
+**[1:00–2:10] Live dashboard.** *(switch to the live tab, generate a fresh batch, bandit mode)*
+> "This is running right now at revenue-recovery-agent-5b31 on Render — not
+> localhost. I'll generate a batch... here's the incident banner — it just
+> collapsed fifteen individual bank-timeout failures into one systemic
+> incident instead of fifteen separate alerts. Let me drill into one case."
+*(click a case, scroll diagnosis → EV → compliance → action → hash)*
 > "Full trail: why it was diagnosed this way, the expected-value math on
-> whether to even chase it, the compliance check, the action chosen, and
-> its exact hash in the audit chain — verifiable, not just logged."
+> whether to chase it, the compliance check, the action chosen, and its
+> exact hash in the audit chain — verifiable, not just logged."
 
-**[2:10–3:10] What makes this more than a reminder bot.**
-*(Switch policy mode to Agentic, generate a small batch, open one case)*
-> "Three things go beyond the brief. First: this mode lets a real LLM
-> choose the action itself — not just generate text. But it's bounded — the
-> model only ever sees actions compliance has *already* approved for this
-> case. If it tries to pick anything else, it's rejected and falls back
+**[2:10–3:10] What makes this more than a reminder bot.** *(switch policy mode to Agentic)*
+> "Three things go beyond the brief. First: in this mode, a real LLM call
+> chooses the action itself — not just generates text. But it's bounded —
+> the model only ever sees actions compliance has already approved for this
+> case. If it tries anything else, it's rejected and falls back
 > automatically — that's tested, not just claimed."
-*(Switch to bandit convergence chart)*
+*(switch to bandit convergence chart)*
 > "Second: this bandit learned which action works best for each failure
-> type from scratch — zero hardcoded rules — and it matches expert-level
-> ground truth on twelve of twelve segments."
-> "Third — and maybe the most important — every claim in this project is
-> something you can re-run yourself. Seven real bugs, found and fixed in
-> the open, are documented in the README, not hidden."
+> type from scratch, zero hardcoded rules, and it matches expert ground
+> truth on twelve of twelve segments. Third, and maybe most important:
+> every claim here is something you can re-run yourself. Seven real bugs,
+> found and fixed in the open, are documented in the README — not hidden."
 
-**[3:10–3:50] Governance.**
-*(Toggle HITL mode, show the approval queue)*
-> "Big or risky actions don't fire automatically. Here's the approval
-> queue — this collections case is over a lakh, so it's paused for a
-> human." *(click approve on one, reject on another)* "Approve, execute.
-> Reject, it never runs. AI proposes, a human authorizes."
+**[3:10–3:45] Governance.** *(toggle HITL, show approval queue)*
+> "Big or risky actions don't fire automatically. This collections case is
+> over a lakh, so it's paused for a human." *(approve one, reject one)*
+> "Approve — it executes. Reject — it never runs. AI proposes, a human
+> authorizes."
 
-**[3:50–4:25] The numbers, honestly.**
-> "Headline result: this agent recovers 36.9% of what it pursues, against
-> 11% for a naive retry-everything bot — consistent across five random
-> seeds. And I'll say the caveat before you ask: the rupee gap looks huge
-> because B2B invoices dominate it — the recovery-*rate* number is the
-> fairer comparison, and it still wins by more than 3x."
+**[3:45–4:20] The numbers, honestly.**
+> "Headline result: 36.9% recovery rate against 11% for a naive
+> retry-everything bot, consistent across five random seeds, net INR won on
+> all five. And the caveat before you ask: the rupee gap looks huge because
+> B2B invoices dominate it — the recovery-rate number is the fair
+> comparison, and it still wins by more than 3x. 111 tests passing, all
+> reproducible from the README."
 
-**[4:25–4:40] Close.**
-> "Everything here is real code on real infrastructure — the LLM calls,
-> the Razorpay payment links, the webhook verification — the only thing
-> simulated is the underlying payments data itself, and that's stated
-> plainly in the README. Thanks for watching."
+**[4:20–4:40] Close.**
+> "The LLM calls, the Razorpay payment links, the webhook verification —
+> all real. The only thing simulated is the underlying payments data
+> itself, stated plainly in the README. Code's at
+> github.com/agastyasharma20/revenue-recovery-agent. Thanks for watching."
 7. **(4:40–5:00) Close.** One sentence on what's real vs simulated (LLM
    calls and Razorpay signature verification are real; payments data is a
    controlled simulation), and where the code and live link live.
